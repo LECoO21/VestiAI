@@ -12,6 +12,7 @@ FitMix 是一个可本地运行、自带网页界面的数字衣橱。它能整�
 - 在“穿搭库”导入完整穿搭：保存造型，并把新识别出的单品同步到衣橱
 - 按分类、季节、收藏、关键词和最近使用时间整理衣橱
 - 选择上装与下装，或选择连衣裙，生成基础/高质量试穿图
+- 上装与下装的组合，或单件连衣裙，都可直接保存到穿搭库
 - 保存最多 6 张形象照，查看最近试穿并把结果存入穿搭库
 - 编辑、收藏、合并和删除单品；删除穿搭不会连带删除独立单品与试穿历史
 - 数据与图片默认保存在本机 `data/`，无需外部数据库
@@ -152,6 +153,39 @@ gunicorn --bind 0.0.0.0:${PORT:-5050} --workers 1 --threads 4 fitmix.app:app
 
 veFaaS 演示模式默认把 SQLite 和图片写入 `/tmp/fitmix-data`，并拒绝在密码或签名密钥缺失时启动。部署包通过 `.vefaasignore` 排除本地 `.env` 与 `data/`。`/tmp` 会随实例销毁而清空，因此短期演示应固定为一个预留实例；需要长期可靠保存时，应改用 NAS 或对象存储与持久化数据库。
 
+## 备份与恢复
+
+**先退出 FitMix 或停止源码服务**，再备份。数据库使用 SQLite 备份接口，已提交但尚未写回主文件的数据也会保留；图片同时复制，并生成完整性校验清单。备份不包含 API Key、日志和可重建的缩略图。
+
+源码版在项目目录运行：
+
+```bash
+.venv/bin/python -m fitmix.backup create --data-dir data
+```
+
+终端会显示新备份的目录，默认位于项目的 `backups/`。Mac App 的数据备份使用同一个工具，指定实际数据位置：
+
+```bash
+.venv/bin/python -m fitmix.backup create --data-dir "$HOME/Library/Application Support/FitMix/data"
+```
+
+检查和恢复时，将示例中的 `fitmix-实际备份名称` 换成刚才显示的目录名：
+
+```bash
+.venv/bin/python -m fitmix.backup verify backups/fitmix-实际备份名称
+.venv/bin/python -m fitmix.backup restore backups/fitmix-实际备份名称 --destination restored-data
+```
+
+恢复只写入尚不存在的新目录，不覆盖原衣橱。源码版可以先用恢复目录启动检查：
+
+```bash
+WARDROBE_DATA_DIR="$PWD/restored-data" .venv/bin/python -m fitmix.app
+```
+
+Mac App 恢复时，把恢复目标设为 `~/Library/Application Support/FitMix/restored-data`。保持 App 关闭，用 Finder 将原 `data` 重命名保留，再将核验好的 `restored-data` 改名为 `data`。
+
+数据库升级前会自动建立一份同样格式的备份；迁移失败时回滚数据库修改并停止启动。较新版本的数据不会被旧代码强行打开。备份可能包含人物照片，请保存在自己管理的位置。
+
 ## 常见问题
 
 **页面提示“百炼凭证尚未配置”**
@@ -192,12 +226,12 @@ chmod +x scripts/macos/build.command
 ## 开发检查
 
 ```bash
-python3 -m venv .venv
+python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m unittest discover -s tests -v
-bash -n scripts/macos/setup.command scripts/macos/start.command scripts/macos/build.command
-.venv/bin/gunicorn --check-config fitmix.app:app
+.venv/bin/python -B scripts/check.py
 ```
+
+检查脚本在临时数据目录运行，清除真实凭证配置，并禁止测试访问真实模型服务；包含既有 unittest、前端语法、Mac 脚本语法和 Gunicorn 配置检查。前端检查需要 Node.js。开发进度和当前验收范围见 [开发实施记录](开发手册/FitMix开发实施记录.md)。
 
 ## License
 

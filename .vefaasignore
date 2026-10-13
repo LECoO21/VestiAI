@@ -7,6 +7,7 @@
 __pycache__/
 *.pyc
 data/
+backups/
 build/
 dist/
 docs/

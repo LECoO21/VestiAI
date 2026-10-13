@@ -1,9 +1,12 @@
 .env
+.env.*
+!.env.example
 .venv/
 __pycache__/
 *.pyc
 .DS_Store
 data/
+backups/
 .impeccable/
 .build-venv*/
 build/

@@ -17,6 +17,13 @@ from flask import Flask, abort, has_request_context, jsonify, render_template, r
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .bailian import BailianClient, BailianError
+from .backup import create_backup
+from .services.context import ServiceError, UserContext
+from .services.tryon import TryonService
+from .services.wardrobe import (
+    WardrobeService, duplicate_map, file_url, garment_json, look_json,
+    person_image_json, thumbnail_url, tryon_json,
+)
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -150,6 +157,21 @@ def current_role() -> str:
     return session.get("role", "")
 
 
+def current_user() -> UserContext:
+    if not has_request_context():
+        raise ServiceError("业务操作需要由服务端提供用户身份", 401, "auth_required")
+    return UserContext(current_owner_id(), current_role())
+
+
+def wardrobe_service() -> WardrobeService:
+    return WardrobeService(db, DATA_DIR)
+
+
+def tryon_service() -> TryonService:
+    return TryonService(db, DATA_DIR, reserve_visitor_tryon,
+                        lambda job_id, tryon_id: enqueue(job_id, "tryon", tryon_id, process_tryon, tryon_id))
+
+
 def save_desktop_credentials(workspace_id: str, api_key: str) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = CONFIG_PATH.with_name(f".{CONFIG_PATH.name}.{uuid.uuid4().hex}.tmp")
@@ -241,15 +263,41 @@ def unique_garment_name(
     return unique_short_name(preferred or garment_name_base(description, garment_type), used)
 
 
+SCHEMA_VERSION = 1
+
+
+def _execute_statements(connection: sqlite3.Connection, script: str) -> None:
+    """Execute DDL inside the caller's transaction; executescript commits it."""
+    statement = ""
+    for line in script.splitlines(keepends=True):
+        statement += line
+        if sqlite3.complete_statement(statement):
+            connection.execute(statement)
+            statement = ""
+    if statement.strip():
+        raise ValueError("数据库迁移包含不完整的 SQL")
+
+
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    existed = DB_PATH.is_file()
+    if existed:
+        with sqlite3.connect(DB_PATH) as existing:
+            version = existing.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise RuntimeError("这份衣橱由较新的 FitMix 创建，请使用对应版本打开")
+        if version < SCHEMA_VERSION:
+            backup = create_backup(DATA_DIR)
+            logger.info("migration backup=%s", backup)
     connection = sqlite3.connect(DB_PATH, timeout=30)
     connection.row_factory = sqlite3.Row
+    created_files: list[Path] = []
     try:
         connection.execute("PRAGMA foreign_keys = OFF")
-        connection.executescript(
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("BEGIN IMMEDIATE")
+        _execute_statements(connection,
             """
-            PRAGMA journal_mode = WAL;
             CREATE TABLE IF NOT EXISTS looks (
                 id TEXT PRIMARY KEY,
                 owner_id TEXT NOT NULL DEFAULT 'admin',
@@ -369,7 +417,7 @@ def init_db() -> None:
                 garment_select = """g.id, g.owner_id, g.look_id, 'look', NULL, g.type, g.label_zh, g.description_zh,
                        g.crop_path, g.mask_path, g.bbox, COALESCE(l.seasons, '[]'), NULL, 0, 0, g.created_at
                 FROM garments g JOIN looks l ON l.id=g.look_id"""
-            connection.executescript(
+            _execute_statements(connection,
                 f"""
                 CREATE TABLE garments_new (
                     id TEXT PRIMARY KEY,
@@ -407,7 +455,7 @@ def init_db() -> None:
             tryon_columns.add("draft_look_id")
         tryon_fks = {row["from"]: row["on_delete"] for row in connection.execute("PRAGMA foreign_key_list(tryons)")}
         if "upper_path" not in tryon_columns or any(tryon_fks.get(key) != "SET NULL" for key in ("upper_id", "lower_id", "dress_id")):
-            connection.executescript(
+            _execute_statements(connection,
                 """
                 CREATE TABLE tryons_new (
                     id TEXT PRIMARY KEY,
@@ -450,7 +498,7 @@ def init_db() -> None:
         if "owner_id" not in person_columns:
             connection.execute("ALTER TABLE person_images ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'admin'")
         if "NAME TEXT NOT NULL UNIQUE" in person_schema.upper():
-            connection.executescript(
+            _execute_statements(connection,
                 """
                 CREATE TABLE person_images_new (
                     id TEXT PRIMARY KEY,
@@ -466,7 +514,7 @@ def init_db() -> None:
                 """
             )
 
-        connection.executescript(
+        _execute_statements(connection,
             """
             CREATE TABLE IF NOT EXISTS look_garments (
                 look_id TEXT NOT NULL REFERENCES looks(id) ON DELETE CASCADE,
@@ -492,6 +540,7 @@ def init_db() -> None:
                     suffix = (DATA_DIR / stored).suffix or ".png"
                     destination = DATA_DIR / "tryons" / f"{uuid.uuid4().hex}-{garment_type}{suffix}"
                     shutil.copy2(DATA_DIR / stored, destination)
+                    created_files.append(destination)
                     updates[f"{garment_type}_path"] = rel_path(destination)
             if updates:
                 assignments = ", ".join(f"{key}=?" for key in updates)
@@ -537,9 +586,12 @@ def init_db() -> None:
         broken = connection.execute("PRAGMA foreign_key_check").fetchall()
         if broken:
             raise RuntimeError(f"数据库迁移后存在无效关联：{broken}")
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()
     except Exception:
         connection.rollback()
+        for path in created_files:
+            path.unlink(missing_ok=True)
         raise
     finally:
         connection.execute("PRAGMA foreign_keys = ON")
@@ -552,14 +604,6 @@ def api_error(message: str, status: int = 400, code: str = "bad_request"):
 
 def rel_path(path: Path) -> str:
     return path.relative_to(DATA_DIR).as_posix()
-
-
-def file_url(path: str | None) -> str | None:
-    return f"/files/{path}" if path else None
-
-
-def thumbnail_url(path: str | None, size: int = 480) -> str | None:
-    return f"/thumbnails/{size}/{path}" if path else None
 
 
 def save_upload(upload, category: str) -> str:
@@ -588,24 +632,6 @@ def save_upload(upload, category: str) -> str:
                 image.convert(mode).save(destination, "PNG", optimize=True)
     except (UnidentifiedImageError, OSError) as exc:
         raise ValueError("图片文件已损坏或格式不受支持") from exc
-    return rel_path(destination)
-
-
-def compose_garment_preview(rows: list[sqlite3.Row]) -> str:
-    canvas = Image.new("RGBA", (960, 1280), "#F5ECE7")
-    column_width = canvas.width // len(rows)
-    for index, row in enumerate(rows):
-        source = DATA_DIR / row["crop_path"]
-        if not source.exists():
-            raise ValueError(f"单品“{row['label_zh']}”的图片不存在")
-        with Image.open(source) as image:
-            garment = ImageOps.exif_transpose(image).convert("RGBA")
-            garment.thumbnail((column_width - 80, 1020), Image.Resampling.LANCZOS)
-            x = index * column_width + (column_width - garment.width) // 2
-            y = (canvas.height - garment.height) // 2
-            canvas.alpha_composite(garment, (x, y))
-    destination = DATA_DIR / "originals" / f"{uuid.uuid4().hex}.png"
-    canvas.convert("RGB").save(destination, "PNG", optimize=True)
     return rel_path(destination)
 
 
@@ -1072,112 +1098,6 @@ def process_tryon(job_id: str, tryon_id: str) -> None:
         )
 
 
-def garment_json(row: sqlite3.Row) -> dict:
-    keys = set(row.keys())
-    return {
-        "id": row["id"],
-        "look_id": row["look_id"],
-        "source_kind": row["source_kind"],
-        "draft": bool(row["draft"]) if "draft" in keys else False,
-        "source_url": file_url(row["source_path"]),
-        "type": row["type"],
-        "label_zh": row["label_zh"],
-        "description_zh": row["description_zh"],
-        "crop_url": file_url(row["crop_path"]),
-        "thumbnail_url": thumbnail_url(row["crop_path"]),
-        "mask_url": file_url(row["mask_path"]),
-        "bbox": json.loads(row["bbox"] or "null"),
-        "seasons": json.loads(row["seasons"] or "[]"),
-        "favorite": bool(row["favorite"]),
-        "created_at": row["created_at"],
-        "usage_count": row["usage_count"] if "usage_count" in keys else 0,
-        "last_used_at": row["last_used_at"] if "last_used_at" in keys else None,
-        "duplicate_of": row["duplicate_of"] if "duplicate_of" in keys else None,
-    }
-
-
-def person_image_json(row: sqlite3.Row) -> dict:
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "url": file_url(row["path"]),
-        "thumbnail_url": thumbnail_url(row["path"], 240),
-        "created_at": row["created_at"],
-    }
-
-
-def look_json(connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
-    garments = connection.execute(
-        """SELECT g.* FROM garments g JOIN look_garments lg ON lg.garment_id=g.id
-           WHERE lg.look_id=? AND g.owner_id=? ORDER BY g.created_at, g.type""",
-        (row["id"], row["owner_id"]),
-    ).fetchall()
-    return {
-        "id": row["id"],
-        "source_url": file_url(row["source_path"]),
-        "thumbnail_url": thumbnail_url(row["source_path"]),
-        "source_kind": row["source_kind"],
-        "source_tryon_id": row["source_tryon_id"],
-        "title_en": row["title_en"],
-        "style_zh": row["style_zh"],
-        "seasons": json.loads(row["seasons"] or "[]"),
-        "palette": json.loads(row["palette"] or "[]"),
-        "favorite": bool(row["favorite"]),
-        "draft": bool(row["draft"]) if "draft" in row.keys() else False,
-        "garments": [garment_json(item) for item in garments],
-        "created_at": row["created_at"],
-    }
-
-
-def tryon_json(row: sqlite3.Row) -> dict:
-    return {
-        "id": row["id"],
-        "person_url": file_url(row["person_path"]),
-        "upper_id": row["upper_id"],
-        "lower_id": row["lower_id"],
-        "dress_id": row["dress_id"],
-        "upper_url": file_url(row["upper_path"]),
-        "lower_url": file_url(row["lower_path"]),
-        "dress_url": file_url(row["dress_path"]),
-        "upper_label": row["upper_label"],
-        "lower_label": row["lower_label"],
-        "dress_label": row["dress_label"],
-        "quality": row["quality"],
-        "status": row["status"],
-        "result_url": file_url(row["result_path"]),
-        "result_thumbnail_url": thumbnail_url(row["result_path"]),
-        "created_at": row["created_at"],
-    }
-
-
-def duplicate_map(rows: list[sqlite3.Row]) -> dict[str, str]:
-    # ponytail: O(n²) is enough for a local wardrobe; index perceptual hashes if collections reach thousands.
-    originals: list[sqlite3.Row] = []
-    duplicates: dict[str, str] = {}
-    for row in sorted(rows, key=lambda item: (item["created_at"], item["id"])):
-        fingerprint = row["image_hash"]
-        match = next(
-            (
-                item for item in originals
-                if item["type"] == row["type"] and fingerprint and item["image_hash"]
-                and (int(fingerprint, 16) ^ int(item["image_hash"], 16)).bit_count() <= 4
-            ),
-            None,
-        )
-        if match:
-            duplicates[row["id"]] = match["id"]
-        else:
-            originals.append(row)
-    return duplicates
-
-
-def snapshot_garment(row: sqlite3.Row, garment_type: str) -> str:
-    source = DATA_DIR / row["crop_path"]
-    destination = DATA_DIR / "tryons" / f"{uuid.uuid4().hex}-{garment_type}{source.suffix or '.png'}"
-    shutil.copy2(source, destination)
-    return rel_path(destination)
-
-
 def quota_json(owner_id: str) -> dict:
     with db() as connection:
         row = connection.execute(
@@ -1214,25 +1134,7 @@ def reserve_visitor_tryon(connection: sqlite3.Connection, owner_id: str) -> bool
 
 
 def owns_file(filename: str) -> bool:
-    if not AUTH_ENABLED:
-        return True
-    owner_id = current_owner_id()
-    if not owner_id:
-        return False
-    with db() as connection:
-        checks = (
-            ("looks", ("source_path",)),
-            ("garments", ("source_path", "crop_path", "mask_path")),
-            ("person_images", ("path",)),
-            ("tryons", ("person_path", "upper_path", "lower_path", "dress_path", "result_path")),
-        )
-        return any(
-            connection.execute(
-                f"SELECT 1 FROM {table} WHERE owner_id=? AND ({' OR '.join(f'{column}=?' for column in columns)}) LIMIT 1",
-                (owner_id, *(filename for _ in columns)),
-            ).fetchone()
-            for table, columns in checks
-        )
+    return wardrobe_service().owns_file(current_user(), filename)
 
 
 @app.before_request
@@ -1367,12 +1269,7 @@ def update_settings():
 
 @app.get("/api/person-images")
 def list_person_images():
-    owner_id = current_owner_id()
-    with db() as connection:
-        rows = connection.execute(
-            "SELECT * FROM person_images WHERE owner_id=? ORDER BY created_at, name", (owner_id,)
-        ).fetchall()
-    return jsonify({"items": [person_image_json(row) for row in rows], "limit": MAX_PERSON_IMAGES})
+    return jsonify({"items": wardrobe_service().person_images(current_user()), "limit": MAX_PERSON_IMAGES})
 
 
 @app.post("/api/person-images")
@@ -1456,15 +1353,7 @@ def create_tryon_draft():
 
 @app.get("/api/tryon-drafts/<look_id>")
 def get_tryon_draft(look_id: str):
-    owner_id = current_owner_id()
-    with db() as connection:
-        row = connection.execute(
-            "SELECT * FROM looks WHERE id=? AND owner_id=? AND draft=1", (look_id, owner_id)
-        ).fetchone()
-        item = look_json(connection, row) if row else None
-    if not item:
-        return api_error("临时搭配不存在", 404, "not_found")
-    return jsonify(item)
+    return jsonify(wardrobe_service().look(current_user(), look_id, draft=True))
 
 
 @app.post("/api/tryon-drafts/<look_id>/save")
@@ -1480,96 +1369,26 @@ def save_tryon_draft(look_id: str):
 
 @app.post("/api/looks/from-garments")
 def create_look_from_garments():
-    owner_id = current_owner_id()
-    garment_ids = (request.get_json(silent=True) or {}).get("garment_ids") or []
-    if not isinstance(garment_ids, list):
-        return api_error("garment_ids 必须是数组")
-    garment_ids = list(dict.fromkeys(str(item) for item in garment_ids if item))
-    if len(garment_ids) < 2:
-        return api_error("请至少选择两件单品")
-    with db() as connection:
-        rows = connection.execute(
-            f"SELECT * FROM garments WHERE owner_id=? AND id IN ({','.join('?' for _ in garment_ids)})",
-            (owner_id, *garment_ids),
-        ).fetchall()
-    if len(rows) != len(garment_ids):
-        return api_error("所选单品不存在", 404, "not_found")
-    row_by_id = {row["id"]: row for row in rows}
-    rows = [row_by_id[item] for item in garment_ids]
-    types = {row["type"] for row in rows}
-    if len(types) != len(rows) or "dress" in types:
-        return api_error("请选择一件上装和一件下装；套装/连衣裙按单件使用")
-    try:
-        source_path = compose_garment_preview(rows)
-    except (OSError, ValueError) as exc:
-        return api_error(str(exc), 409, "source_missing")
-    season_sets = [set(json.loads(row["seasons"] or "[]")) for row in rows]
-    seasons = set.intersection(*season_sets) or set.union(*season_sets)
-    season_order = [season for season in ("spring", "summer", "autumn", "winter") if season in seasons]
-    look_id = uuid.uuid4().hex
-    title = "＋".join(row["label_zh"] for row in rows)[:100]
-    try:
-        with db() as connection:
-            connection.execute(
-                """INSERT INTO looks(id, owner_id, source_path, source_kind, title_en, style_zh, seasons, palette)
-                   VALUES (?, ?, ?, 'composition', ?, '衣橱搭配', ?, '[]')""",
-                (look_id, owner_id, source_path, title, json.dumps(season_order, ensure_ascii=False)),
-            )
-            for garment_id in garment_ids:
-                connection.execute(
-                    "INSERT INTO look_garments(look_id, garment_id) VALUES (?, ?)",
-                    (look_id, garment_id),
-                )
-            row = connection.execute("SELECT * FROM looks WHERE id=?", (look_id,)).fetchone()
-            result = look_json(connection, row)
-    except Exception:
-        (DATA_DIR / source_path).unlink(missing_ok=True)
-        raise
-    return jsonify(result), 201
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return api_error("请提供 JSON 对象和 garment_ids 数组")
+    garment_ids = body.get("garment_ids") or []
+    return jsonify(wardrobe_service().save_outfit(current_user(), garment_ids)), 201
 
 
 @app.get("/api/jobs/<job_id>")
 def get_job(job_id: str):
-    owner_id = current_owner_id()
-    with db() as connection:
-        row = connection.execute("SELECT * FROM jobs WHERE id=? AND owner_id=?", (job_id, owner_id)).fetchone()
-    if not row:
-        return api_error("任务不存在", 404, "not_found")
-    return jsonify(
-        {
-            "id": row["id"],
-            "kind": row["kind"],
-            "entity_id": row["entity_id"],
-            "status": row["status"],
-            "stage": row["stage"],
-            "progress": row["progress"],
-            "error": {"code": row["error_code"], "message": row["error_message"]} if row["error_message"] else None,
-        }
-    )
+    return jsonify(wardrobe_service().job(current_user(), job_id))
 
 
 @app.get("/api/looks")
 def list_looks():
-    owner_id = current_owner_id()
-    with db() as connection:
-        rows = connection.execute(
-            "SELECT * FROM looks WHERE owner_id=? AND draft=0 ORDER BY created_at DESC", (owner_id,)
-        ).fetchall()
-        items = [look_json(connection, row) for row in rows]
-    return jsonify({"items": items})
+    return jsonify({"items": wardrobe_service().looks(current_user())})
 
 
 @app.get("/api/looks/<look_id>")
 def get_look(look_id: str):
-    owner_id = current_owner_id()
-    with db() as connection:
-        row = connection.execute(
-            "SELECT * FROM looks WHERE id=? AND owner_id=? AND draft=0", (look_id, owner_id)
-        ).fetchone()
-        item = look_json(connection, row) if row else None
-    if not item:
-        return api_error("穿搭不存在", 404, "not_found")
-    return jsonify(item)
+    return jsonify(wardrobe_service().look(current_user(), look_id))
 
 
 @app.patch("/api/looks/<look_id>")
@@ -1594,20 +1413,7 @@ def update_look(look_id: str):
 
 @app.get("/api/garments")
 def list_garments():
-    owner_id = current_owner_id()
-    with db() as connection:
-        rows = connection.execute(
-            """SELECT g.*,
-               (SELECT COUNT(*) FROM tryons t WHERE t.owner_id=g.owner_id AND (t.upper_id=g.id OR t.lower_id=g.id OR t.dress_id=g.id)) AS usage_count,
-               (SELECT MAX(t.created_at) FROM tryons t WHERE t.owner_id=g.owner_id AND (t.upper_id=g.id OR t.lower_id=g.id OR t.dress_id=g.id)) AS last_used_at
-               FROM garments g WHERE g.owner_id=? AND g.draft=0 ORDER BY g.created_at DESC, g.id DESC""",
-            (owner_id,),
-        ).fetchall()
-    duplicates = duplicate_map(rows)
-    items = [garment_json(row) for row in rows]
-    for item in items:
-        item["duplicate_of"] = duplicates.get(item["id"])
-    return jsonify({"items": items})
+    return jsonify({"items": wardrobe_service().search(current_user())})
 
 
 @app.post("/api/garments")
@@ -1625,26 +1431,7 @@ def create_garment_route():
 
 @app.get("/api/garments/<garment_id>")
 def get_garment(garment_id: str):
-    owner_id = current_owner_id()
-    with db() as connection:
-        row = connection.execute(
-            "SELECT * FROM garments WHERE id=? AND owner_id=?", (garment_id, owner_id)
-        ).fetchone()
-        if not row:
-            return api_error("衣物不存在", 404, "not_found")
-        used = connection.execute(
-            """SELECT * FROM tryons WHERE owner_id=? AND (upper_id=? OR lower_id=? OR dress_id=?)
-               ORDER BY created_at DESC""",
-            (owner_id, garment_id, garment_id, garment_id),
-        ).fetchall()
-        source_look = connection.execute(
-            "SELECT id, style_zh, source_kind FROM looks WHERE id=? AND owner_id=?",
-            (row["look_id"], owner_id),
-        ).fetchone() if row["look_id"] else None
-    item = garment_json(row)
-    item["source_look"] = dict(source_look) if source_look else None
-    item["used_tryons"] = [tryon_json(tryon) for tryon in used]
-    return jsonify(item)
+    return jsonify(wardrobe_service().garment(current_user(), garment_id))
 
 
 @app.post("/api/jobs/<job_id>/retry-garment")
@@ -1819,163 +1606,39 @@ def merge_garment(garment_id: str):
 
 @app.post("/api/tryons")
 def create_tryon_route():
-    owner_id = current_owner_id()
-    upper_id = request.form.get("upper_id") or None
-    lower_id = request.form.get("lower_id") or None
-    dress_id = request.form.get("dress_id") or None
-    draft_look_id = request.form.get("draft_look_id") or None
-    quality = request.form.get("quality", "basic")
-    if quality not in {"basic", "plus"}:
-        return api_error("quality 只能是 basic 或 plus")
-    if current_role() == "visitor" and quality != "basic":
-        return api_error("高质量试穿仅管理员可用", 403, "admin_only")
-    if dress_id and (upper_id or lower_id):
-        return api_error("套装/连衣裙不能与上下装同时选择")
-    selected = [item for item in (upper_id, lower_id, dress_id) if item]
-    if not selected:
-        return api_error("请至少选择一件衣物")
-    with db() as connection:
-        rows = connection.execute(
-            f"SELECT * FROM garments WHERE owner_id=? AND id IN ({','.join('?' for _ in selected)})",
-            (owner_id, *selected),
-        ).fetchall()
-    found = {row["id"]: row["type"] for row in rows}
-    row_by_id = {row["id"]: row for row in rows}
-    expected = {upper_id: "upper", lower_id: "lower", dress_id: "dress"}
-    if len(found) != len(selected) or any(found.get(item) != garment_type for item, garment_type in expected.items() if item):
-        return api_error("所选衣物不存在或类型不匹配")
-    if draft_look_id:
-        with db() as connection:
-            draft = connection.execute(
-                "SELECT 1 FROM looks WHERE id=? AND owner_id=? AND draft=1", (draft_look_id, owner_id)
-            ).fetchone()
-            linked = connection.execute(
-                f"SELECT garment_id FROM look_garments WHERE look_id=? AND garment_id IN ({','.join('?' for _ in selected)})",
-                (draft_look_id, *selected),
-            ).fetchall()
-        if not draft or len(linked) != len(selected):
-            return api_error("临时搭配已失效，请重新上传", 409, "draft_expired")
-    source_tryon_id = request.form.get("source_tryon_id") or None
-    person_image_id = request.form.get("person_image_id") or None
-    created_person_file = False
-    if request.files.get("person") and request.files["person"].filename:
-        try:
-            person_path = save_upload(request.files["person"], "tryons")
-            created_person_file = True
-        except ValueError as exc:
+    uploaded_person = None
+    try:
+        upload = request.files.get("person")
+        if upload and upload.filename:
+            uploaded_person = save_upload(upload, "tryons")
+        created = tryon_service().create(
+            current_user(), {kind: request.form.get(f"{kind}_id") or None for kind in ("upper", "lower", "dress")},
+            quality=request.form.get("quality", "basic"),
+            person_image_id=request.form.get("person_image_id") or None,
+            source_tryon_id=request.form.get("source_tryon_id") or None,
+            uploaded_person_path=uploaded_person,
+            draft_look_id=request.form.get("draft_look_id") or None,
+        )
+        return jsonify(created), 202
+    except Exception as exc:
+        if uploaded_person:
+            with db() as connection:
+                referenced = connection.execute("SELECT 1 FROM tryons WHERE person_path=?", (uploaded_person,)).fetchone()
+            if not referenced:
+                (DATA_DIR / uploaded_person).unlink(missing_ok=True)
+        if isinstance(exc, ValueError) and not isinstance(exc, ServiceError):
             return api_error(str(exc))
-    elif person_image_id:
-        with db() as connection:
-            saved_person = connection.execute(
-                "SELECT path FROM person_images WHERE id=? AND owner_id=?", (person_image_id, owner_id)
-            ).fetchone()
-        if not saved_person or not (DATA_DIR / saved_person["path"]).exists():
-            return api_error("保存的形象照不存在，请重新选择", 404, "not_found")
-        source = DATA_DIR / saved_person["path"]
-        destination = DATA_DIR / "tryons" / f"{uuid.uuid4().hex}{source.suffix or '.png'}"
-        shutil.copy2(source, destination)
-        person_path = rel_path(destination)
-        created_person_file = True
-    elif source_tryon_id:
-        with db() as connection:
-            source_tryon = connection.execute(
-                "SELECT person_path FROM tryons WHERE id=? AND owner_id=?", (source_tryon_id, owner_id)
-            ).fetchone()
-        if not source_tryon or not (DATA_DIR / source_tryon["person_path"]).exists():
-            return api_error("原试穿形象照不存在，请重新选择")
-        person_path = source_tryon["person_path"]
-    else:
-        return api_error("请选择全身正面形象照")
-    tryon_id = uuid.uuid4().hex
-    snapshots = {}
-    for garment_type, garment_id in (("upper", upper_id), ("lower", lower_id), ("dress", dress_id)):
-        if garment_id:
-            snapshots[garment_type] = snapshot_garment(row_by_id[garment_id], garment_type)
-    with db() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        quota_ok = current_role() != "visitor" or reserve_visitor_tryon(connection, owner_id)
-        if quota_ok:
-            connection.execute(
-                """INSERT INTO tryons(
-                   id, owner_id, person_path, upper_id, lower_id, dress_id,
-                   upper_path, lower_path, dress_path, upper_label, lower_label, dress_label,
-                   draft_look_id, quality, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')""",
-                (
-                    tryon_id,
-                    owner_id,
-                    person_path,
-                    upper_id,
-                    lower_id,
-                    dress_id,
-                    snapshots.get("upper"),
-                    snapshots.get("lower"),
-                    snapshots.get("dress"),
-                    row_by_id[upper_id]["label_zh"] if upper_id else None,
-                    row_by_id[lower_id]["label_zh"] if lower_id else None,
-                    row_by_id[dress_id]["label_zh"] if dress_id else None,
-                    draft_look_id,
-                    quality,
-                ),
-            )
-    if not quota_ok:
-        if created_person_file:
-            (DATA_DIR / person_path).unlink(missing_ok=True)
-        for stored in snapshots.values():
-            (DATA_DIR / stored).unlink(missing_ok=True)
-        return api_error("本次演示额度已用完", 429, "demo_quota_exhausted")
-    job_id = create_job("tryon", tryon_id, owner_id=owner_id)
-    enqueue(job_id, "tryon", tryon_id, process_tryon, tryon_id)
-    return jsonify({"tryon_id": tryon_id, "job_id": job_id}), 202
+        raise
 
 
 @app.post("/api/tryons/<tryon_id>/retry")
 def retry_tryon_plus(tryon_id: str):
-    if current_role() == "visitor":
-        return api_error("高质量试穿仅管理员可用", 403, "admin_only")
-    owner_id = current_owner_id()
-    with db() as connection:
-        source = connection.execute(
-            "SELECT * FROM tryons WHERE id=? AND owner_id=?", (tryon_id, owner_id)
-        ).fetchone()
-        if not source:
-            return api_error("试穿记录不存在", 404, "not_found")
-        new_id = uuid.uuid4().hex
-        connection.execute(
-            """INSERT INTO tryons(
-                   id, owner_id, person_path, upper_id, lower_id, dress_id,
-                   upper_path, lower_path, dress_path, upper_label, lower_label, dress_label,
-                   draft_look_id, quality, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'plus', 'queued')""",
-            (
-                new_id,
-                owner_id,
-                source["person_path"],
-                source["upper_id"],
-                source["lower_id"],
-                source["dress_id"],
-                source["upper_path"],
-                source["lower_path"],
-                source["dress_path"],
-                source["upper_label"],
-                source["lower_label"],
-                source["dress_label"],
-                source["draft_look_id"],
-            ),
-        )
-    job_id = create_job("tryon", new_id, owner_id=owner_id)
-    enqueue(job_id, "tryon", new_id, process_tryon, new_id)
-    return jsonify({"tryon_id": new_id, "job_id": job_id}), 202
+    return jsonify(tryon_service().plus(current_user(), tryon_id)), 202
 
 
 @app.get("/api/tryons")
 def list_tryons():
-    owner_id = current_owner_id()
-    with db() as connection:
-        rows = connection.execute(
-            "SELECT * FROM tryons WHERE owner_id=? ORDER BY created_at DESC", (owner_id,)
-        ).fetchall()
-    return jsonify({"items": [tryon_json(row) for row in rows]})
+    return jsonify({"items": tryon_service().history(current_user())})
 
 
 @app.post("/api/tryons/<tryon_id>/save-look")
@@ -2078,6 +1741,11 @@ def delete_garment(garment_id: str):
     for stored in paths:
         (DATA_DIR / stored).unlink(missing_ok=True)
     return "", 204
+
+
+@app.errorhandler(ServiceError)
+def service_error(error):
+    return api_error(str(error), error.status, error.code)
 
 
 @app.errorhandler(413)

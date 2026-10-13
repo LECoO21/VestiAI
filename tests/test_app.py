@@ -69,7 +69,7 @@ class AppTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        wardrobe.DATA_DIR = Path(self.temp.name)
+        wardrobe.DATA_DIR = Path(self.temp.name) / "data"
         wardrobe.DB_PATH = wardrobe.DATA_DIR / "wardrobe.db"
         for folder in ("originals", "garment-sources", "garments", "person-images", "tryons", "thumbnails"):
             (wardrobe.DATA_DIR / folder).mkdir(parents=True)
@@ -143,6 +143,8 @@ class AppTests(unittest.TestCase):
     def test_thumbnail_endpoint_downsamples_and_caches(self):
         source = wardrobe.DATA_DIR / "originals" / "large.png"
         Image.new("RGB", (1200, 800), "navy").save(source)
+        with wardrobe.db() as connection:
+            connection.execute("INSERT INTO looks(id, source_path) VALUES ('thumbnail-look', 'originals/large.png')")
         first = self.client.get("/thumbnails/240/originals/large.png")
         second = self.client.get("/thumbnails/240/originals/large.png")
         self.assertEqual((first.status_code, first.mimetype, first.data), (200, "image/webp", second.data))
@@ -385,6 +387,94 @@ class AppTests(unittest.TestCase):
         self.assertEqual(len(response.json["garments"]), 2)
         self.assertEqual(response.json["seasons"], ["autumn"])
         self.assertTrue((wardrobe.DATA_DIR / response.json["source_url"].removeprefix("/files/")).exists())
+
+    def test_dress_is_a_complete_saveable_outfit(self):
+        Image.new("RGB", (180, 260), "navy").save(wardrobe.DATA_DIR / "garments" / "dress.png")
+        with wardrobe.db() as connection:
+            connection.execute("INSERT INTO garments(id, type, label_zh, crop_path) VALUES ('dress', 'dress', '蓝裙', 'garments/dress.png')")
+        saved = self.client.post("/api/looks/from-garments", json={"garment_ids": ["dress"]})
+        self.assertEqual(saved.status_code, 201)
+        self.assertEqual([item["id"] for item in saved.json["garments"]], ["dress"])
+
+    def test_save_outfit_rejects_invalid_input_without_writes(self):
+        for body in (["dress"], {"garment_ids": "dress"}, {"garment_ids": ["dress", "dress"]}):
+            self.assertEqual(self.client.post("/api/looks/from-garments", json=body).status_code, 400)
+        self.assertEqual(self.client.get("/api/looks").json["items"], [])
+        self.assertEqual(list((wardrobe.DATA_DIR / "originals").iterdir()), [])
+
+    def test_newer_database_is_refused_without_changes(self):
+        with wardrobe.db() as connection:
+            connection.execute("PRAGMA user_version=999")
+            connection.execute("INSERT INTO looks(id, source_path) VALUES ('future', 'originals/future.jpg')")
+        with self.assertRaises(RuntimeError):
+            wardrobe.init_db()
+        with wardrobe.db() as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 999)
+            self.assertEqual(connection.execute("SELECT id FROM looks").fetchone()[0], "future")
+        self.assertFalse((Path(self.temp.name) / "backups").exists())
+
+    def test_migration_failure_rolls_back_ddl_and_keeps_backup(self):
+        wardrobe.DB_PATH.unlink()
+        with sqlite3.connect(wardrobe.DB_PATH) as connection:
+            connection.executescript("CREATE TABLE looks(id TEXT PRIMARY KEY, source_path TEXT NOT NULL, title_en TEXT, style_zh TEXT, seasons TEXT NOT NULL DEFAULT '[]', palette TEXT NOT NULL DEFAULT '[]', raw_analysis TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); INSERT INTO looks(id, source_path) VALUES ('old', 'originals/old.jpg');")
+            before = connection.execute("SELECT name, sql FROM sqlite_master ORDER BY name").fetchall()
+        original = wardrobe._execute_statements
+        calls = []
+        def fail_after_ddl(connection, script):
+            original(connection, script)
+            calls.append(script)
+            if len(calls) == 2:
+                raise RuntimeError("simulated migration failure")
+        with patch.object(wardrobe, "_execute_statements", side_effect=fail_after_ddl), self.assertRaises(RuntimeError):
+            wardrobe.init_db()
+        with sqlite3.connect(wardrobe.DB_PATH) as connection:
+            self.assertEqual(connection.execute("SELECT name, sql FROM sqlite_master ORDER BY name").fetchall(), before)
+            self.assertEqual(connection.execute("SELECT id FROM looks").fetchone()[0], "old")
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+        from fitmix.backup import verify_backup
+        backups = list((Path(self.temp.name) / "backups").iterdir())
+        self.assertEqual(len(backups), 1)
+        verify_backup(backups[0])
+
+    def test_local_files_do_not_expose_database_logs_or_unowned_images(self):
+        (wardrobe.DATA_DIR / "wardrobe.log").write_text("private")
+        Image.new("RGB", (20, 20)).save(wardrobe.DATA_DIR / "originals" / "unlinked.png")
+        for path in ("wardrobe.db", "wardrobe.log", "originals/unlinked.png", "../.env"):
+            self.assertEqual(self.client.get(f"/files/{path}").status_code, 404)
+
+    def test_shared_services_enforce_identity_without_http(self):
+        from fitmix.services.context import UserContext, ServiceError
+        owner = UserContext("visitor:a", "visitor")
+        other = UserContext("visitor:b", "visitor")
+        service = wardrobe.wardrobe_service()
+        for filename in ("private.png", "person.png"):
+            Image.new("RGB", (180, 260)).save(wardrobe.DATA_DIR / "garments" / filename)
+        with wardrobe.db() as connection:
+            connection.execute("INSERT INTO garments(id, owner_id, type, label_zh, crop_path) VALUES ('private', ?, 'dress', '私有裙', 'garments/private.png')", (owner.owner_id,))
+            connection.execute("INSERT INTO person_images(id, owner_id, name, path) VALUES ('private-person', ?, '形象1', 'garments/person.png')", (owner.owner_id,))
+            connection.execute("INSERT INTO jobs(id, owner_id, kind, entity_id, status, stage) VALUES ('private-job', ?, 'look', 'private', 'queued', 'queued')", (owner.owner_id,))
+        self.assertEqual([item["id"] for item in service.search(owner)], ["private"])
+        self.assertEqual(service.search(other), [])
+        self.assertFalse(service.owns_file(other, "garments/private.png"))
+        self.assertTrue(service.owns_file(owner, "garments/private.png"))
+        for operation in (lambda: service.garment(other, "private"), lambda: service.job(other, "private-job"), lambda: service.save_outfit(other, ["private"])):
+            with self.assertRaises(ServiceError) as error:
+                operation()
+            self.assertEqual(error.exception.status, 404)
+        with self.assertRaises(ServiceError):
+            UserContext("", "admin")
+        with self.assertRaises(ServiceError):
+            wardrobe.current_user()
+        with patch.object(wardrobe, "enqueue") as queued:
+            tryons = wardrobe.tryon_service()
+            with self.assertRaises(ServiceError):
+                tryons.create(other, {"dress": "private"}, person_image_id="private-person")
+            with self.assertRaises(ServiceError):
+                tryons.create(owner, {"dress": "private"}, person_image_id="private-person", quality="plus")
+            with self.assertRaises(ServiceError):
+                tryons.create(owner, {"dress": "private"}, person_image_id="someone-else")
+            queued.assert_not_called()
+            self.assertEqual(list((wardrobe.DATA_DIR / "tryons").iterdir()), [])
 
     def test_legacy_schema_migrates_without_losing_tryon(self):
         wardrobe.DB_PATH.unlink()

@@ -742,17 +742,18 @@ function renderSelectedOutfit() {
   });
   const key = items.map(({ item }) => item.id).sort().join(":");
   const hasPair = Boolean(state.selectedGarments.upper && state.selectedGarments.lower);
-  const canSave = state.outfitSource === "upload" ? items.length > 0 : hasPair;
+  const hasDress = Boolean(state.selectedGarments.dress);
+  const canSave = state.outfitSource === "upload" ? items.length > 0 : hasPair || hasDress;
   const saved = canSave && state.savedOutfitKey === key;
   $("#saveOutfit").disabled = !canSave || saved;
   $("#saveOutfit").textContent = saved ? "已保存到穿搭库" : "保存到穿搭库";
   $("#goTryon").disabled = items.length === 0;
-  $("#saveRequirement").textContent = saved ? "这套搭配已进入穿搭库。" : state.outfitSource === "upload" && items.length ? "搭配图已就绪，可直接保存或试穿。" : hasPair ? "上装和下装已选好。" : state.selectedGarments.upper ? "再选择一件下装即可保存。" : state.selectedGarments.lower ? "再选择一件上装即可保存。" : state.selectedGarments.dress ? "可以直接试穿；保存搭配需上装与下装。" : "选择一件上装和一件下装。";
+  $("#saveRequirement").textContent = saved ? "这套搭配已进入穿搭库。" : state.outfitSource === "upload" && items.length ? "搭配图已就绪，可直接保存或试穿。" : hasPair ? "上装和下装已选好。" : hasDress ? "套装/连衣裙可直接保存或试穿。" : state.selectedGarments.upper ? "再选择一件下装即可保存。" : state.selectedGarments.lower ? "再选择一件上装即可保存。" : "选择一件上装和一件下装，或一件套装/连衣裙。";
 }
 
 async function saveSelectedOutfit() {
   const items = selectedOutfitItems();
-  if (!items.length || (state.outfitSource === "wardrobe" && items.length < 2)) return;
+  if (!items.length || (state.outfitSource === "wardrobe" && items.length < 2 && !state.selectedGarments.dress)) return;
   const key = items.map(({ item }) => item.id).sort().join(":");
   $("#saveOutfit").disabled = true;
   try {

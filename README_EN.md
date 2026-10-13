@@ -12,6 +12,7 @@ FitMix is a local-first digital wardrobe with a browser interface. It organizes 
 - In Outfit Library, import a full look and sync newly detected garments into the wardrobe
 - Organize garments by type, season, favorite, keyword, and recent use
 - Combine a top and bottom, or choose a dress, then create basic or high-quality virtual try-ons
+- Save a top/bottom combination or a single dress directly to the outfit library
 - Save up to six person photos, browse recent generations, and save results to the outfit library
 - Edit, favorite, merge, and delete garments without deleting independent try-on history
 - Store images and metadata locally in `data/` without an external database
@@ -192,12 +193,18 @@ The outputs are `dist/FitMix.app` and `dist/FitMix-macOS-arm64.dmg`.
 ## Development checks
 
 ```bash
-python3 -m venv .venv
+python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m unittest discover -s tests -v
-bash -n scripts/macos/setup.command scripts/macos/start.command scripts/macos/build.command
-.venv/bin/gunicorn --check-config fitmix.app:app
+.venv/bin/python -B scripts/check.py
 ```
+
+The check script uses temporary data, clears real credentials, and blocks live model requests. Node.js is required for frontend checks.
+
+## Backups and recovery
+
+Stop FitMix before creating or restoring a full backup. Run `python -m fitmix.backup create --data-dir data` with the project virtual environment. The backup includes SQLite (including committed WAL changes) and images, with SHA-256 checksums; it excludes credentials, logs, and thumbnails. The default destination is `backups/`, beside the data directory.
+
+Use `python -m fitmix.backup verify BACKUP_DIRECTORY` to validate a backup, then `python -m fitmix.backup restore BACKUP_DIRECTORY --destination restored-data`. Recovery only writes into a new directory and preserves the original. For the macOS app, use `~/Library/Application Support/FitMix/data` as the data directory. Database upgrades automatically back up existing data; failed migrations roll back and stop startup. See the Chinese README for complete commands and app recovery steps.
 
 ## License
 
