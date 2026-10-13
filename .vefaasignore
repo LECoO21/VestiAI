@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.git/
+.github/
+.venv/
+__pycache__/
+*.pyc
+data/
+build/
+dist/
+docs/
+tests/
+scripts/
+.impeccable/
+*.command
+*.spec

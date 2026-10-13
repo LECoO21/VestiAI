@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>FitMix · 本地数字衣橱</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="accessGate" class="access-gate" hidden>
+    <form id="accessForm" class="access-card">
+      <span class="brand-mark">W</span>
+      <p class="eyebrow">PRIVATE DRESSING ROOM</p>
+      <h1>进入 FitMix</h1>
+      <p>输入演示访问密码。每个浏览器都会拥有独立衣橱，彼此看不到数据。</p>
+      <label>访问密码<input id="accessPassword" type="password" autocomplete="current-password" required autofocus></label>
+      <button id="accessSubmit" class="primary-button">进入我的衣橱</button>
+      <p id="accessError" class="access-error" role="alert" hidden></p>
+    </form>
+  </div>
+  <header class="masthead">
+    <a class="brand" href="#" aria-label="FitMix 首页">
+      <span class="brand-mark">W</span>
+      <span><strong>FitMix</strong><small>PRIVATE DRESSING ROOM</small></span>
+    </a>
+    <nav class="view-tabs" role="tablist" aria-label="主要功能">
+      <button id="wardrobeTab" class="tab active" role="tab" aria-selected="true" aria-controls="wardrobeView" data-view="wardrobe">我的衣橱</button>
+      <button id="tryonTab" class="tab" role="tab" aria-selected="false" aria-controls="tryonView" data-view="tryon">搭配试穿</button>
+      <button id="looksTab" class="tab" role="tab" aria-selected="false" aria-controls="looksView" data-view="looks">穿搭库</button>
+    </nav>
+    <div class="masthead-actions">
+      <button id="settingsButton" class="settings-button" hidden>API 设置</button>
+      <span id="demoQuota" class="demo-quota" hidden></span>
+      <button id="accountButton" class="settings-button" hidden>退出</button>
+      <div id="healthBadge" class="health-badge"><span></span> 检查服务中</div>
+    </div>
+  </header>
+
+  <div id="credentialBanner" class="credential-banner" hidden>
+    百炼凭证尚未配置。请按 README 的 BYOK 说明创建 <code>.env</code>，然后重新启动服务。
+  </div>
+
+  <main>
+    <section id="looksView" class="studio-grid" role="tabpanel" aria-labelledby="looksTab" hidden>
+      <aside class="history-panel panel">
+        <div class="panel-title">
+          <div><h2>穿搭库</h2></div>
+          <span id="lookCount" class="count">0</span>
+        </div>
+        <button type="button" class="upload-button" data-file-target="lookInput">导入完整穿搭</button>
+        <input id="lookInput" type="file" accept="image/jpeg,image/png" hidden>
+        <p class="file-hint">保存整套人物穿搭，并把识别出的新单品同步到衣橱；已有单品不会重复添加。</p>
+        <div id="lookFilterTabs" class="filter-tabs subtle look-filter-tabs" role="group" aria-label="穿搭收藏和季节筛选">
+          <button class="active" aria-pressed="true" data-look-filter="all">全部穿搭</button>
+          <button aria-pressed="false" data-look-filter="favorite">收藏</button>
+          <button aria-pressed="false" data-look-filter="spring_autumn">春秋</button>
+          <button aria-pressed="false" data-look-filter="summer">夏</button>
+          <button aria-pressed="false" data-look-filter="winter">冬</button>
+        </div>
+        <div id="lookHistory" class="look-history"></div>
+      </aside>
+
+      <section class="canvas-panel panel" aria-live="polite">
+        <div class="canvas-toolbar">
+          <span class="canvas-hint">拖动倾斜 · 双击复位 · 方向键微调</span>
+          <div class="canvas-actions">
+            <button id="favoriteLook" class="icon-button favorite-action" type="button" aria-pressed="false" hidden>收藏</button>
+            <button id="deleteLook" class="icon-button danger" type="button" title="删除当前穿搭" hidden>删除</button>
+          </div>
+        </div>
+        <div id="emptyCanvas" class="empty-canvas">
+          <h1>把灵感放进衣橱</h1>
+          <p>保存完整造型，同时把识别出的新衣服同步到衣橱。</p>
+          <div class="empty-actions">
+            <button type="button" class="primary-button" data-file-target="lookInput">导入完整穿搭</button>
+          </div>
+        </div>
+        <div id="lookStage" class="look-stage" hidden>
+          <div id="tiltCard" class="tilt-card" tabindex="0" aria-label="穿搭照片，可拖动倾斜、双击复位或使用方向键微调">
+            <img id="lookImage" alt="当前穿搭">
+            <span class="photo-label">衣橱档案</span>
+          </div>
+        </div>
+        <div id="lookProgress" class="task-overlay" hidden>
+          <div class="spinner"></div>
+          <strong id="lookProgressTitle">正在读懂这套穿搭</strong>
+          <span id="lookProgressStage">准备中</span>
+          <div class="progress-track"><i id="lookProgressBar"></i></div>
+        </div>
+      </section>
+
+      <aside class="detail-panel panel">
+        <div id="lookDetails" class="look-details empty-detail">
+          <h2>等待一套新穿搭</h2>
+          <p>分析结果和识别到的单品会在这里出现。</p>
+        </div>
+      </aside>
+    </section>
+
+    <section id="wardrobeView" class="wardrobe-page" role="tabpanel" aria-labelledby="wardrobeTab">
+      <div class="wardrobe-heading">
+        <div>
+          <h1>我的衣橱</h1>
+          <p>上传单件衣服或人物穿搭照。人物穿搭照会拆分出可识别的衣服，加入衣橱。</p>
+        </div>
+        <div class="wardrobe-upload">
+          <button type="button" class="primary-button" data-file-target="garmentInput">添加衣服</button>
+          <input id="garmentInput" type="file" accept="image/jpeg,image/png" hidden>
+          <small>支持平铺、衣架、商品图和人物穿搭照 · JPG/PNG · 5KB–20MB</small>
+        </div>
+      </div>
+
+      <div id="garmentProgress" class="inline-progress panel" hidden>
+        <div class="spinner"></div>
+        <div><strong>正在识别图片中的衣服</strong><span id="garmentProgressStage">准备中</span></div>
+        <div class="progress-track"><i id="garmentProgressBar"></i></div>
+      </div>
+      <div id="garmentRetry" class="manual-retry wardrobe-retry panel" hidden></div>
+
+      <section class="wardrobe-library panel">
+        <div class="library-toolbar">
+          <div id="wardrobeTypeTabs" class="filter-tabs" role="group" aria-label="衣物类型">
+            <button class="active" aria-pressed="true" data-wardrobe-type="all">全部单品</button>
+            <button aria-pressed="false" data-wardrobe-type="upper">上装</button>
+            <button aria-pressed="false" data-wardrobe-type="lower">下装</button>
+            <button aria-pressed="false" data-wardrobe-type="dress">套装/连衣裙</button>
+          </div>
+          <details id="wardrobeMoreFilters" class="filter-menu">
+            <summary id="wardrobeFilterSummary">筛选</summary>
+            <div id="wardrobeSeasonTabs" class="filter-tabs subtle" role="group" aria-label="收藏和季节筛选">
+              <button class="active" aria-pressed="true" data-wardrobe-filter="all">不限</button>
+              <button aria-pressed="false" data-wardrobe-filter="favorite">收藏</button>
+              <button aria-pressed="false" data-wardrobe-filter="spring_autumn">春秋</button>
+              <button aria-pressed="false" data-wardrobe-filter="summer">夏</button>
+              <button aria-pressed="false" data-wardrobe-filter="winter">冬</button>
+            </div>
+          </details>
+          <div class="library-tools">
+            <input id="garmentSearch" type="search" placeholder="搜索名称或描述" aria-label="搜索衣橱">
+            <select id="garmentSort" aria-label="衣橱排序">
+              <option value="recent">最近添加</option>
+              <option value="used">最近使用</option>
+              <option value="favorite">收藏优先</option>
+            </select>
+            <button id="clearWardrobeFilters" class="text-button">清除筛选</button>
+          </div>
+          <span id="garmentCount" class="library-count">0 件</span>
+        </div>
+        <div id="wardrobeScope" class="scope-banner" hidden></div>
+        <div id="garmentGrid" class="garment-grid"></div>
+      </section>
+    </section>
+
+    <section id="tryonView" class="tryon-page" role="tabpanel" aria-labelledby="tryonTab" hidden>
+      <div class="tryon-heading">
+        <h1>搭配试穿</h1>
+        <p>从衣橱里，试一套新的自己。选好衣服后，可直接保存搭配或选择形象照生成试穿。</p>
+      </div>
+      <ol class="tryon-steps" aria-label="搭配试穿步骤">
+        <li class="active" data-tryon-step-indicator="compose"><span>1</span>选择搭配</li>
+        <li data-tryon-step-indicator="person"><span>2</span>选择全身正面形象照</li>
+        <li data-tryon-step-indicator="result"><span>3</span>查看效果</li>
+      </ol>
+      <section class="tryon-workspace panel" aria-live="polite">
+        <div id="tryonCompose" class="tryon-step-panel">
+          <div class="selector-heading"><div><h2>选择搭配</h2><p>从衣橱组合单品，或直接上传一张已搭配好的照片。</p></div><strong id="tryonResultCount">0 件</strong></div>
+          <div class="outfit-source-tabs" role="group" aria-label="搭配来源">
+            <button class="active" aria-pressed="true" data-outfit-source="wardrobe">从衣橱选择</button>
+            <button aria-pressed="false" data-outfit-source="upload">上传搭配图</button>
+          </div>
+
+          <div id="wardrobeOutfitSource">
+            <div id="tryonTypeTabs" class="filter-tabs tryon-type-tabs" role="group" aria-label="试穿衣物类型">
+              <button class="active" aria-pressed="true" data-tryon-type="upper">上装 <span id="tryonUpperCount">0</span></button>
+              <button aria-pressed="false" data-tryon-type="lower">下装 <span id="tryonLowerCount">0</span></button>
+              <button aria-pressed="false" data-tryon-type="dress">套装/连衣裙 <span id="tryonDressCount">0</span></button>
+            </div>
+            <div class="tryon-tools">
+              <label class="tryon-search"><span class="sr-only">搜索衣服名称或描述</span><input id="tryonSearch" type="search" placeholder="搜索名称或描述"></label>
+              <details id="tryonMoreFilters" class="filter-menu compact-menu">
+                <summary id="tryonFilterSummary">筛选</summary>
+                <div id="tryonFilterTabs" class="filter-tabs subtle compact" role="group" aria-label="试穿衣物筛选">
+                  <button class="active" aria-pressed="true" data-tryon-filter="all">不限</button>
+                  <button aria-pressed="false" data-tryon-filter="favorite">收藏</button>
+                  <button aria-pressed="false" data-tryon-filter="spring_autumn">春秋</button>
+                  <button aria-pressed="false" data-tryon-filter="summer">夏</button>
+                  <button aria-pressed="false" data-tryon-filter="winter">冬</button>
+                </div>
+              </details>
+              <label class="tryon-sort"><span class="sr-only">衣服排序</span><select id="tryonSort"><option value="used">最近使用</option><option value="recent">最近添加</option><option value="favorite">收藏优先</option></select></label>
+            </div>
+            <div id="wardrobePicker" class="wardrobe-picker" aria-live="polite"></div>
+            <div class="picker-pagination" aria-label="衣物分页">
+              <button id="pickerPrev" class="text-button" disabled>上一页</button><span id="pickerRange">0 件</span><button id="pickerNext" class="text-button" disabled>下一页</button>
+            </div>
+          </div>
+
+          <div id="uploadOutfitSource" class="upload-outfit-source" hidden>
+            <button type="button" class="outfit-upload-card" data-file-target="draftOutfitInput">
+              <span>上传已搭配好的照片</span>
+              <small>支持人物穿搭照、平铺组合图或商品搭配图 · JPG/PNG · 5KB–20MB</small>
+            </button>
+            <input id="draftOutfitInput" type="file" accept="image/jpeg,image/png" hidden>
+            <div id="draftOutfitProgress" class="draft-outfit-progress" hidden>
+              <div class="spinner"></div><div><strong>正在识别这套搭配</strong><span id="draftOutfitProgressStage">准备中</span></div>
+              <div class="progress-track"><i id="draftOutfitProgressBar"></i></div>
+            </div>
+            <div id="draftOutfitPreview" class="draft-outfit-preview" hidden></div>
+            <p class="draft-note">仅用于试穿时不会写入衣橱；保存到穿搭库后，才会同步识别到的新衣服。</p>
+          </div>
+
+          <section class="outfit-tray" aria-labelledby="currentOutfitTitle">
+            <div class="outfit-tray-head"><div><h3 id="currentOutfitTitle">当前搭配</h3><p id="saveRequirement" aria-live="polite">选择一件上装和一件下装。</p></div></div>
+            <div id="selectedOutfit" class="selected-outfit"></div>
+            <div class="outfit-actions">
+              <button id="saveOutfit" class="secondary-button" disabled>保存到穿搭库</button>
+              <button id="goTryon" class="primary-button" disabled>试穿看看</button>
+            </div>
+          </section>
+        </div>
+
+        <div id="tryonEmpty" class="generation-setup" hidden>
+          <div class="generation-head"><div><button id="modifyOutfit" class="back-button">修改搭配</button><h2>试穿看看</h2><p id="generateRequirement" aria-live="polite">还需选择一张全身正面形象照。</p></div><span class="price-pill">基础试穿 · 约 ¥0.20</span></div>
+          <div class="generation-layout">
+            <aside class="generation-outfit"><h3>本次搭配</h3><div id="generationOutfit" class="generation-outfit-list"></div></aside>
+            <div>
+              <div class="person-step"><h3>选择全身正面形象照</h3><p>单人、全身、光线充足且背景简单，生成效果更稳定。</p></div>
+              <div class="persona-manager">
+                <button type="button" id="personDrop" class="person-drop" data-file-target="personInput" aria-label="添加全身正面形象照">
+                  <img id="personPreview" alt="当前选择的全身正面形象照" hidden>
+                  <span id="personPlaceholder"><strong>添加形象照</strong><small>最多保存 6 张</small></span>
+                </button>
+                <input id="personInput" type="file" accept="image/jpeg,image/png" hidden>
+                <div class="person-library-wrap">
+                  <div class="person-library-head"><span>已保存形象</span><small id="personCount">0 / 6</small></div>
+                  <div id="personLibrary" class="person-library"></div>
+                </div>
+              </div>
+              <p id="personSourceNote" class="person-source-note" hidden>正在使用历史试穿中的形象照，不占 6 张形象库名额。</p>
+            </div>
+          </div>
+          <button id="generateTryon" class="primary-button wide" disabled>试穿看看 · 约 ¥0.20</button>
+          <p class="cost-note admin-only">高质量试穿只在结果页手动选择，不会自动产生额外费用。</p>
+        </div>
+        <div id="tryonProgress" class="result-progress" hidden>
+          <div class="spinner large"></div><h2>正在生成试穿图</h2><p id="tryonProgressStage">上传素材</p>
+          <div class="progress-track"><i id="tryonProgressBar"></i></div>
+          <small>通常数十秒，请保持此页面打开</small>
+        </div>
+        <div id="tryonError" class="result-empty error-state" hidden>
+          <div class="error-mark">!</div><h2>这次没有生成成功</h2><p id="tryonErrorMessage">请检查图片后重试，已经选择的衣服和形象照会保留。</p>
+          <button id="dismissTryonError" class="secondary-button">返回试穿设置</button>
+        </div>
+        <div id="tryonResult" class="result-content" hidden>
+          <div class="result-head"><div><h2>试穿结果</h2><p>默认查看生成结果，需要时可切换前后对比。</p></div><div class="result-view-tabs" role="group" aria-label="结果查看方式"><button class="active" aria-pressed="true" data-result-mode="result">试穿结果</button><button aria-pressed="false" data-result-mode="compare">前后对比</button></div></div>
+          <div id="resultMedia" class="result-media">
+            <button id="resultOriginalToggle" class="result-before" aria-label="打开前后对比"><img id="resultPersonImage" alt="试穿前全身正面形象照"><span>原图</span></button>
+            <figure class="result-after"><img id="resultImage" alt="AI 试穿结果"><figcaption>试穿后 · <b id="qualityTag">基础试穿</b></figcaption></figure>
+          </div>
+          <div class="result-actions">
+            <button id="saveLook" class="primary-button">保存到穿搭库</button>
+            <button id="reusePerson" class="secondary-button">继续搭配</button>
+            <details class="result-more">
+              <summary>更多操作</summary>
+              <div>
+                <a id="downloadResult" download>下载到本机</a>
+                <button id="retryPerson">更换形象照</button>
+                <button id="viewTryonGarments">查看所用单品</button>
+                <button id="retryPlus" class="admin-only">生成高质量试穿 · 约 ¥0.50</button>
+              </div>
+            </details>
+          </div>
+          <p class="cost-note admin-only">高质量试穿会新建一次任务，不会覆盖当前结果。</p>
+        </div>
+      </section>
+
+      <section class="recent-results panel">
+        <div class="panel-title"><div><h2>最近试穿</h2></div></div>
+        <div id="tryonHistory" class="tryon-history"></div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="settingsDialog" class="app-dialog settings-dialog" aria-labelledby="settingsDialogTitle">
+    <form id="settingsForm" class="dialog-motion-surface">
+      <div class="dialog-head">
+        <div><h2 id="settingsDialogTitle">配置阿里云百炼</h2><p>凭证只保存在这台 Mac，不会上传到 GitHub。</p></div>
+        <button type="button" class="dialog-close" data-close-dialog aria-label="关闭 API 设置"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="editor-fields">
+        <label>华北 2（北京）Workspace ID<input id="settingsWorkspaceId" autocomplete="off" required></label>
+        <label>API Key<input id="settingsApiKey" type="password" autocomplete="new-password"></label>
+      </div>
+      <p id="settingsKeyHint" class="settings-help">首次配置时需要填写 API Key。</p>
+      <p class="settings-help">还没有凭证？查看百炼官方的 <a href="https://help.aliyun.com/zh/model-studio/get-api-key" target="_blank" rel="noreferrer">API Key</a> 和 <a href="https://help.aliyun.com/zh/model-studio/obtain-the-app-id-and-workspace-id" target="_blank" rel="noreferrer">Workspace ID</a> 说明。</p>
+      <div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog>稍后配置</button><button id="saveSettings" class="primary-button">保存设置</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="garmentDialog" class="app-dialog garment-dialog" aria-labelledby="garmentDialogTitle">
+    <form id="garmentForm" class="dialog-motion-surface">
+      <div class="dialog-head"><div><h2 id="garmentDialogTitle">单品详情</h2></div><button type="button" class="dialog-close" data-close-dialog aria-label="关闭单品详情"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+      <div class="garment-editor">
+        <img id="garmentDialogImage" alt="单品图片">
+        <div class="editor-fields">
+          <label>名称<input id="garmentName" maxlength="6" required></label>
+          <label>分类<select id="garmentType"><option value="upper">上装</option><option value="lower">下装</option><option value="dress">套装/连衣裙</option></select></label>
+          <label>可见描述<textarea id="garmentDescription" maxlength="240" rows="3"></textarea></label>
+          <fieldset><legend>适合季节</legend><label><input type="checkbox" name="garmentSeason" value="spring_autumn"> 春秋</label><label><input type="checkbox" name="garmentSeason" value="summer"> 夏</label><label><input type="checkbox" name="garmentSeason" value="winter"> 冬</label></fieldset>
+        </div>
+      </div>
+      <div id="garmentMeta" class="dialog-meta"></div>
+      <div id="garmentUsage" class="dialog-usage"></div>
+      <div class="dialog-actions"><button type="button" id="deleteGarment" class="secondary-button danger-button">删除单品</button><button type="button" id="reparseGarment" class="secondary-button" title="重新识别衣服轮廓并替换当前单品图片">重新识别衣服轮廓</button><button type="button" id="dialogTryonGarment" class="secondary-button">用这件去试穿</button><button class="primary-button">保存修改</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="generationDialog" class="app-dialog generation-dialog" aria-labelledby="generationDialogTitle">
+    <div class="dialog-motion-surface">
+      <div class="dialog-head"><div><h2 id="generationDialogTitle">确认本次试穿</h2></div><button type="button" class="dialog-close" data-close-dialog aria-label="关闭试穿确认"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+      <div id="generationSummary" class="generation-summary"></div>
+      <div class="price-confirm"><span>本次模型与预计费用</span><strong id="generationPrice">基础试穿 · 约 ¥0.20</strong></div>
+      <div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog>返回修改</button><button type="button" id="confirmGeneration" class="primary-button">确认生成</button></div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"><span id="toastMessage"></span><button id="toastClose" aria-label="关闭提示"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+  <script src="/static/pagination.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
