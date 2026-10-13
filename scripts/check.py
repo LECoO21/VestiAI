@@ -1,4 +1,4 @@
-"""Run FitMix's existing checks without opening real data or model connections."""
+"""Run VestiAI's existing checks without opening real data or model connections."""
 import logging
 import os
 import shutil

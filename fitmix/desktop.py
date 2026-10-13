@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 def prepare_environment() -> Path:
+    # Keep the original data directory so the rename preserves existing wardrobes.
     support_dir = Path(
         os.environ.get("FITMIX_SUPPORT_DIR", Path.home() / "Library" / "Application Support" / "FitMix")
     )
@@ -19,7 +20,7 @@ def prepare_environment() -> Path:
 
 
 def show_launch_error(message: str) -> None:
-    script = 'on run argv\ndisplay alert "FitMix 无法启动" message (item 1 of argv) as critical\nend run'
+    script = 'on run argv\ndisplay alert "VestiAI 无法启动" message (item 1 of argv) as critical\nend run'
     subprocess.run(["osascript", "-e", script, message], check=False)
 
 
@@ -30,7 +31,7 @@ def main() -> None:
 
     port = int(os.environ.get("FITMIX_HTTP_PORT", "0")) or None
     webview.create_window(
-        "FitMix",
+        "VestiAI",
         app,
         width=1440,
         height=920,

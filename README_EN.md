@@ -1,10 +1,12 @@
-# FitMix
+# VestiAI
 
 [中文](README.md)
 
-FitMix is a local-first digital wardrobe with a browser interface. It organizes garments and outfits, manages profile photos, and creates AI virtual try-on results.
+VestiAI is a local-first digital wardrobe with a browser interface. It organizes garments and outfits, manages profile photos, and creates AI virtual try-on results.
 
-> FitMix uses BYOK (Bring Your Own Key). This repository contains no default API key; each user supplies their own AI service credentials and pays for their own usage.
+The project was renamed from FitMix to VestiAI. Existing source commands, configuration, and wardrobe storage remain compatible.
+
+> VestiAI uses BYOK (Bring Your Own Key). This repository contains no default API key; each user supplies their own AI service credentials and pays for their own usage.
 
 ## Features
 
@@ -27,7 +29,7 @@ FitMix is a local-first digital wardrobe with a browser interface. It organizes 
 | --- | --- |
 | ![AI try-on result](docs/screenshots/try-on-result.png) | ![Outfit library](docs/screenshots/looks.png) |
 
-The screenshots use purpose-made demo assets and contain none of the author's real garments, people, or history.
+The screenshots show the earlier demo before the rename. They use purpose-made assets and contain none of the author's real garments, people, or history. The current interface is named VestiAI.
 
 ## Requirements
 
@@ -35,7 +37,7 @@ The screenshots use purpose-made demo assets and contain none of the author's re
 - Network access to Alibaba Cloud Model Studio and an enabled Alibaba Cloud account
 - A recent version of Chrome, Safari, Edge, or Firefox
 
-FitMix currently targets the **China North 2 (Beijing)** region. The API key and Workspace ID must belong to that region and the same workspace.
+VestiAI currently targets the **China North 2 (Beijing)** region. The API key and Workspace ID must belong to that region and the same workspace.
 
 ## Get Bailian credentials
 
@@ -53,14 +55,14 @@ Never commit `.env`, an API key, or screenshots containing credentials. The macO
 
 ## macOS app (recommended)
 
-The current installer supports **Apple Silicon Macs (M1 or newer) running macOS 11 or later** and does not require Python:
+The locally built installer supports **Apple Silicon Macs (M1 or newer) running macOS 11 or later** and does not require Python after installation:
 
-1. Download `FitMix-macOS-arm64.dmg` from [GitHub Releases](https://github.com/betterjally-oss/FitMix/releases/latest).
-2. Open the DMG and drag FitMix to Applications.
-3. On first launch, Control-click FitMix, choose Open, and confirm. Regular double-click works afterward.
+1. Follow the macOS installer build instructions below to create `VestiAI-macOS-arm64.dmg`.
+2. Open the DMG and drag VestiAI to Applications.
+3. On first launch, Control-click VestiAI, choose Open, and confirm. Regular double-click works afterward.
 4. Enter your own Bailian Workspace ID and API key in the API Settings dialog.
 
-Wardrobe data and credentials are stored in `~/Library/Application Support/FitMix`. The API key is never committed to GitHub or displayed in the settings screen.
+Wardrobe data and credentials remain in `~/Library/Application Support/FitMix` so existing wardrobes continue to work. The API key is never committed to GitHub or displayed in the settings screen. The original [GitHub Releases](https://github.com/betterjally-oss/FitMix/releases/latest) still provide the older FitMix installer.
 
 ## Install from source
 
@@ -128,7 +130,7 @@ Browsing, searching, filtering, editing, favoriting, saving combinations, and de
 
 - Git ignores `.env`, `data/`, virtual environments, caches, and OS files.
 - SQLite data, originals, garment images, and generated results stay in the local `data/` directory by default.
-- AI features upload the relevant images to Bailian for processing; FitMix is not offline inference.
+- AI features upload the relevant images to Bailian for processing; VestiAI is not offline inference.
 - Login is disabled by default for local use, and existing local data belongs to the administrator. When hosted-demo passwords are configured, each browser receives an isolated anonymous wardrobe and cannot access another visitor's data.
 - Anonymous identity is stored in a signed browser cookie. Clearing browser data creates a new empty wardrobe, so only use demo-safe assets.
 
@@ -169,15 +171,15 @@ Use JPG or PNG with clear clothing, one person, good light, and a stable network
 
 **Port 5050 is already in use**
 
-Close the old FitMix terminal or stop the process that owns the port, then retry.
+Close the old VestiAI terminal or stop the process that owns the port, then retry.
 
 **Model task failed or timed out**
 
-FitMix does not automatically create another paid try-on. Retry manually with the current selection and inspect quota, permissions, and task status in Bailian.
+VestiAI does not automatically create another paid try-on. Retry manually with the current selection and inspect quota, permissions, and task status in Bailian.
 
 ## Uninstall
 
-For the app edition, delete `/Applications/FitMix.app`. To also remove wardrobe data and local credentials, delete `~/Library/Application Support/FitMix`. For the source edition, stop the service and delete the FitMix folder. Delete the corresponding API key in Bailian to revoke access.
+For the app edition, delete `/Applications/VestiAI.app`. To also remove wardrobe data and local credentials, delete `~/Library/Application Support/FitMix`. For the source edition, stop the service and delete the project folder. Delete the corresponding API key in Bailian to revoke access.
 
 ## Build the macOS installer
 
@@ -188,7 +190,7 @@ chmod +x scripts/macos/build.command
 ./scripts/macos/build.command
 ```
 
-The outputs are `dist/FitMix.app` and `dist/FitMix-macOS-arm64.dmg`.
+The outputs are `dist/VestiAI.app` and `dist/VestiAI-macOS-arm64.dmg`.
 
 ## Development checks
 
@@ -202,7 +204,7 @@ The check script uses temporary data, clears real credentials, and blocks live m
 
 ## Backups and recovery
 
-Stop FitMix before creating or restoring a full backup. Run `python -m fitmix.backup create --data-dir data` with the project virtual environment. The backup includes SQLite (including committed WAL changes) and images, with SHA-256 checksums; it excludes credentials, logs, and thumbnails. The default destination is `backups/`, beside the data directory.
+Stop VestiAI before creating or restoring a full backup. Run `python -m fitmix.backup create --data-dir data` with the project virtual environment. The backup includes SQLite (including committed WAL changes) and images, with SHA-256 checksums; it excludes credentials, logs, and thumbnails. The default destination is `backups/`, beside the data directory.
 
 Use `python -m fitmix.backup verify BACKUP_DIRECTORY` to validate a backup, then `python -m fitmix.backup restore BACKUP_DIRECTORY --destination restored-data`. Recovery only writes into a new directory and preserves the original. For the macOS app, use `~/Library/Application Support/FitMix/data` as the data directory. Database upgrades automatically back up existing data; failed migrations roll back and stop startup. See the Chinese README for complete commands and app recovery steps.
 

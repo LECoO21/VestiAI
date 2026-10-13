@@ -33,7 +33,7 @@ def _check_database(path: Path) -> None:
 
 
 def create_backup(data_dir: Path, backup_root: Path | None = None) -> Path:
-    """Copy SQLite (including committed WAL data) and images; stop FitMix first."""
+    """Copy SQLite (including committed WAL data) and images; stop VestiAI first."""
     data_dir = Path(data_dir).resolve()
     database = data_dir / "wardrobe.db"
     if not database.is_file() or database.is_symlink():
@@ -43,7 +43,7 @@ def create_backup(data_dir: Path, backup_root: Path | None = None) -> Path:
         raise ValueError("备份目录必须位于衣橱数据目录之外")
     backup_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     token = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
-    destination = backup_root / f"fitmix-{token}"
+    destination = backup_root / f"vestiai-{token}"
     temporary = backup_root / f".pending-{token}"
     temporary.mkdir(mode=0o700)
     try:
@@ -146,7 +146,7 @@ def restore_backup(backup_dir: Path, destination: Path) -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="FitMix 备份工具；创建和恢复前请先退出 FitMix")
+    parser = argparse.ArgumentParser(description="VestiAI 备份工具；创建和恢复前请先退出 VestiAI")
     commands = parser.add_subparsers(dest="command", required=True)
     create = commands.add_parser("create", help="备份数据库和图片，不包含 API Key")
     create.add_argument("--data-dir", type=Path, required=True)

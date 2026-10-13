@@ -189,10 +189,10 @@ cd "$SCRIPT_DIR/../.."
 ENV_FILE="$PWD/.env"
 TOTAL_STAGES=4
 
-banner "FitMix · 百炼设置"
+banner "VestiAI · 百炼设置"
 
 stage "开通华北 2（北京）模型服务"
-say "FitMix 只使用阿里云百炼华北 2（北京）的 Qwen-VL 与 OutfitAnyone。"
+say "VestiAI 只使用阿里云百炼华北 2（北京）的 Qwen-VL 与 OutfitAnyone。"
 open_url "https://bailian.console.aliyun.com/"
 step "登录阿里云，在百炼控制台确认模型服务已开通。"
 step "确认后续创建的是华北 2（北京）的业务空间和 API Key。"

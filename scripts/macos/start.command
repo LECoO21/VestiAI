@@ -41,6 +41,6 @@ printf '正在检查依赖…\n'
   done
 ) &
 
-printf 'FitMix 已启动：http://127.0.0.1:5050\n'
+printf 'VestiAI 已启动：http://127.0.0.1:5050\n'
 printf '关闭此窗口或按 Control-C 即可停止。\n\n'
 exec .venv/bin/python -m fitmix.app

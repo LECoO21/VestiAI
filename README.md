@@ -1,8 +1,10 @@
-# FitMix
+# VestiAI
 
 [English](README_EN.md)
 
-FitMix 是一个可本地运行、自带网页界面的数字衣橱。它能整理衣物、保存搭配、管理形象照，并生成 AI 虚拟试穿效果。
+VestiAI 是一个可本地运行、自带网页界面的数字衣橱。它能整理衣物、保存搭配、管理形象照，并生成 AI 虚拟试穿效果。
+
+项目由 FitMix 更名为 VestiAI。源码目录和启动命令继续兼容原版，已有衣橱与凭证无需搬迁。
 
 > 本项目采用 BYOK（Bring Your Own Key）：仓库不包含任何默认 API Key，使用者自行配置 AI 服务凭证并承担相应费用。
 
@@ -27,7 +29,7 @@ FitMix 是一个可本地运行、自带网页界面的数字衣橱。它能整�
 | --- | --- |
 | ![AI 试穿结果](docs/screenshots/try-on-result.png) | ![穿搭库](docs/screenshots/looks.png) |
 
-截图使用专门生成的演示素材，不含作者的真实衣物、人物或历史记录。
+截图来自更名前的演示版本，使用专门生成的素材，不含作者的真实衣物、人物或历史记录；当前界面名称为 VestiAI。
 
 ## 系统要求
 
@@ -35,7 +37,7 @@ FitMix 是一个可本地运行、自带网页界面的数字衣橱。它能整�
 - 可访问阿里云百炼的网络和一个已开通百炼的阿里云账号
 - Chrome、Safari、Edge 或 Firefox 的较新版本
 
-FitMix 当前固定使用百炼 **华北 2（北京）** 地域。API Key 与 Workspace ID 必须属于该地域和同一业务空间。
+VestiAI 当前固定使用百炼 **华北 2（北京）** 地域。API Key 与 Workspace ID 必须属于该地域和同一业务空间。
 
 ## 获取百炼凭证
 
@@ -53,14 +55,14 @@ DASHSCOPE_WORKSPACE_ID=你的_业务空间_ID
 
 ## macOS App（推荐）
 
-当前安装包适用于 **Apple Silicon Mac（M1 及更新芯片）、macOS 11 或更高版本**，无需安装 Python：
+本地构建的安装包适用于 **Apple Silicon Mac（M1 及更新芯片）、macOS 11 或更高版本**，安装后无需 Python：
 
-1. 从 [GitHub Releases](https://github.com/betterjally-oss/FitMix/releases/latest) 下载 `FitMix-macOS-arm64.dmg`。
-2. 打开 DMG，把 FitMix 拖进“应用程序”。
-3. 第一次启动时，按住 Control 点击 FitMix，选择“打开”并确认；之后可正常双击。
+1. 按文末“构建 macOS 安装包”生成 `VestiAI-macOS-arm64.dmg`。
+2. 打开 DMG，把 VestiAI 拖进“应用程序”。
+3. 第一次启动时，按住 Control 点击 VestiAI，选择“打开”并确认；之后可正常双击。
 4. 在自动弹出的“API 设置”中填写自己的百炼 Workspace ID 和 API Key。
 
-衣橱数据和凭证保存在 `~/Library/Application Support/FitMix`。API Key 不会进入 GitHub，也不会显示在设置页中。
+衣橱数据和凭证继续保存在 `~/Library/Application Support/FitMix`，以便使用原有衣橱。API Key 不会进入 GitHub，也不会显示在设置页中。原项目的 [GitHub Releases](https://github.com/betterjally-oss/FitMix/releases/latest) 仍是旧版 FitMix 安装包。
 
 ## 源码安装与启动
 
@@ -155,7 +157,7 @@ veFaaS 演示模式默认把 SQLite 和图片写入 `/tmp/fitmix-data`，并拒�
 
 ## 备份与恢复
 
-**先退出 FitMix 或停止源码服务**，再备份。数据库使用 SQLite 备份接口，已提交但尚未写回主文件的数据也会保留；图片同时复制，并生成完整性校验清单。备份不包含 API Key、日志和可重建的缩略图。
+**先退出 VestiAI 或停止源码服务**，再备份。数据库使用 SQLite 备份接口，已提交但尚未写回主文件的数据也会保留；图片同时复制，并生成完整性校验清单。备份不包含 API Key、日志和可重建的缩略图。
 
 源码版在项目目录运行：
 
@@ -169,11 +171,11 @@ veFaaS 演示模式默认把 SQLite 和图片写入 `/tmp/fitmix-data`，并拒�
 .venv/bin/python -m fitmix.backup create --data-dir "$HOME/Library/Application Support/FitMix/data"
 ```
 
-检查和恢复时，将示例中的 `fitmix-实际备份名称` 换成刚才显示的目录名：
+检查和恢复时，将示例中的 `vestiai-实际备份名称` 换成刚才显示的目录名：
 
 ```bash
-.venv/bin/python -m fitmix.backup verify backups/fitmix-实际备份名称
-.venv/bin/python -m fitmix.backup restore backups/fitmix-实际备份名称 --destination restored-data
+.venv/bin/python -m fitmix.backup verify backups/vestiai-实际备份名称
+.venv/bin/python -m fitmix.backup restore backups/vestiai-实际备份名称 --destination restored-data
 ```
 
 恢复只写入尚不存在的新目录，不覆盖原衣橱。源码版可以先用恢复目录启动检查：
@@ -202,7 +204,7 @@ Mac App 恢复时，把恢复目标设为 `~/Library/Application Support/FitMix/
 
 **端口 5050 已被占用**
 
-先关闭旧的 FitMix 终端；或找到占用该端口的进程并停止后重试。
+先关闭旧的 VestiAI 终端；或找到占用该端口的进程并停止后重试。
 
 **模型任务失败或超时**
 
@@ -210,7 +212,7 @@ Mac App 恢复时，把恢复目标设为 `~/Library/Application Support/FitMix/
 
 ## 卸载
 
-App 版删除 `/Applications/FitMix.app` 即可卸载；如需同时清除衣橱数据和本地凭证，再删除 `~/Library/Application Support/FitMix`。源码版停止服务后删除 FitMix 文件夹即可。需要撤销调用权限时，请同时在百炼控制台删除对应 API Key。
+App 版删除 `/Applications/VestiAI.app` 即可卸载；如需同时清除衣橱数据和本地凭证，再删除 `~/Library/Application Support/FitMix`。源码版停止服务后删除项目文件夹即可。需要撤销调用权限时，请同时在百炼控制台删除对应 API Key。
 
 ## 构建 macOS 安装包
 
@@ -221,7 +223,7 @@ chmod +x scripts/macos/build.command
 ./scripts/macos/build.command
 ```
 
-生成文件位于 `dist/FitMix.app` 和 `dist/FitMix-macOS-arm64.dmg`。
+生成文件位于 `dist/VestiAI.app` 和 `dist/VestiAI-macOS-arm64.dmg`。
 
 ## 开发检查
 
@@ -231,7 +233,7 @@ python3.11 -m venv .venv
 .venv/bin/python -B scripts/check.py
 ```
 
-检查脚本在临时数据目录运行，清除真实凭证配置，并禁止测试访问真实模型服务；包含既有 unittest、前端语法、Mac 脚本语法和 Gunicorn 配置检查。前端检查需要 Node.js。开发进度和当前验收范围见 [开发实施记录](开发手册/FitMix开发实施记录.md)。
+检查脚本在临时数据目录运行，清除真实凭证配置，并禁止测试访问真实模型服务；包含既有 unittest、前端语法、Mac 脚本语法和 Gunicorn 配置检查。前端检查需要 Node.js。开发进度和当前验收范围见 [开发实施记录](开发手册/VestiAI开发实施记录.md)。
 
 ## License
 

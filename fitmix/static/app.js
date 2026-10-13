@@ -938,7 +938,7 @@ function showTryon(item) {
   $("#qualityTag").textContent = qualityNames[item.quality] || item.quality;
   setResultMode("result");
   $("#downloadResult").href = item.result_url;
-  $("#downloadResult").setAttribute("download", `fitmix-${item.id.slice(0, 8)}.png`);
+  $("#downloadResult").setAttribute("download", `vestiai-${item.id.slice(0, 8)}.png`);
   $("#retryPlus").hidden = item.quality === "plus" || state.auth?.role === "visitor";
   $(".result-more").open = false;
   const saved = state.looks.some((look) => look.source_tryon_id === item.id);

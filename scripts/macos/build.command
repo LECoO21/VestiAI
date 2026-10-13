@@ -31,16 +31,18 @@ fi
 
 VERSION="${FITMIX_VERSION:-0.1.1}"
 ARCH="$(uname -m)"
-APP_PATH="$PWD/dist/FitMix.app"
-DMG_NAME="FitMix-macOS-${ARCH}.dmg"
+APP_PATH="$PWD/dist/VestiAI.app"
+DMG_NAME="VestiAI-macOS-${ARCH}.dmg"
+
+# Preserve the installed app's identity and permissions when changing its display name.
 
 "$BUILD_VENV/bin/python" -m PyInstaller \
   --noconfirm \
   --clean \
   --windowed \
   --onedir \
-  --name FitMix \
-  --icon "$PWD/scripts/macos/FitMix.icns" \
+  --name VestiAI \
+  --icon "$PWD/scripts/macos/VestiAI.icns" \
   --osx-bundle-identifier com.betterjally.fitmix \
   --add-data "$PWD/fitmix/templates:fitmix/templates" \
   --add-data "$PWD/fitmix/static:fitmix/static" \
@@ -56,11 +58,11 @@ PLIST="$APP_PATH/Contents/Info.plist"
 codesign --force --deep --sign - "$APP_PATH"
 codesign --verify --deep --strict "$APP_PATH"
 
-DMG_STAGE="$(mktemp -d /tmp/fitmix-dmg.XXXXXX)"
+DMG_STAGE="$(mktemp -d /tmp/vestiai-dmg.XXXXXX)"
 trap 'rm -rf "$DMG_STAGE"' EXIT
-ditto "$APP_PATH" "$DMG_STAGE/FitMix.app"
+ditto "$APP_PATH" "$DMG_STAGE/VestiAI.app"
 ln -s /Applications "$DMG_STAGE/Applications"
-hdiutil create -quiet -volname FitMix -srcfolder "$DMG_STAGE" -ov -format UDZO "dist/$DMG_NAME"
+hdiutil create -quiet -volname VestiAI -srcfolder "$DMG_STAGE" -ov -format UDZO "dist/$DMG_NAME"
 (cd dist && shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256")
 
 printf '完成：%s\n' "$APP_PATH"

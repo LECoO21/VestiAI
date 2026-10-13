@@ -1,1 +1,1 @@
-"""FitMix application package."""
+"""VestiAI application package."""
