@@ -78,10 +78,12 @@ cd VestiAI
 The setup wizard opens the official Bailian pages, writes credentials to a user-readable-only `.env`, and validates them without creating a paid model task:
 
 ```bash
-chmod +x scripts/macos/setup.command scripts/macos/start.command
+chmod +x scripts/macos/setup.command scripts/macos/start.command scripts/macos/stop.command
 ./scripts/macos/setup.command
 ./scripts/macos/start.command
 ```
+
+The script opens the browser after the server is ready. The source server runs independently in the background and survives closing the launcher terminal. Stop it with `./scripts/macos/stop.command`; check its status with `.venv/bin/python scripts/macos/server.py status`. Startup logs are saved in `data/server-startup.log`. Stop the server before backing up, restoring, or updating it.
 
 ### Windows (PowerShell)
 

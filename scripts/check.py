@@ -38,7 +38,7 @@ def main() -> int:
                 [node, "--check", "fitmix/static/app.js"],
                 [node, "--check", "fitmix/static/pagination.js"],
                 [node, "fitmix/static/pagination.js"],
-                ["bash", "-n", "scripts/macos/setup.command", "scripts/macos/start.command", "scripts/macos/build.command"],
+                ["bash", "-n", "scripts/macos/setup.command", "scripts/macos/start.command", "scripts/macos/stop.command", "scripts/macos/build.command"],
                 [sys.executable, "-B", "-m", "gunicorn", "--check-config", "fitmix.app:app"],
             ):
                 subprocess.run(command, check=True)

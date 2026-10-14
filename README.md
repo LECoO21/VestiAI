@@ -78,10 +78,18 @@ cd VestiAI
 向导会打开百炼官方页面，把凭证写入仅当前用户可读的 `.env`，并做一次不创建付费任务的验证：
 
 ```bash
-chmod +x scripts/macos/setup.command scripts/macos/start.command
+chmod +x scripts/macos/setup.command scripts/macos/start.command scripts/macos/stop.command
 ./scripts/macos/setup.command
 ./scripts/macos/start.command
 ```
+
+启动脚本会等服务就绪后打开网页。源码服务在后台运行，关闭启动终端后仍可使用；停止时双击 `scripts/macos/stop.command`，或运行：
+
+```bash
+./scripts/macos/stop.command
+```
+
+需要查看运行状态时执行 `.venv/bin/python scripts/macos/server.py status`。端口被其他程序占用或启动失败时不会提示成功，启动日志位于 `data/server-startup.log`。备份、恢复或更新程序前，先停止服务。
 
 ### Windows（PowerShell）
 

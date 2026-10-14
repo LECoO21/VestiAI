@@ -31,16 +31,6 @@ fi
 printf '正在检查依赖…\n'
 .venv/bin/python -m pip install --disable-pip-version-check --quiet -r requirements.txt
 
-(
-  for _ in {1..50}; do
-    if curl --silent --fail http://127.0.0.1:5050/api/health >/dev/null 2>&1; then
-      open http://127.0.0.1:5050
-      exit 0
-    fi
-    sleep 0.2
-  done
-) &
-
-printf 'VestiAI 已启动：http://127.0.0.1:5050\n'
-printf '关闭此窗口或按 Control-C 即可停止。\n\n'
-exec .venv/bin/python -m fitmix.app
+.venv/bin/python "$SCRIPT_DIR/server.py" start
+printf '服务已在后台运行，可以关闭此终端窗口。停止服务请双击 stop.command。\n'
+open "http://127.0.0.1:${FITMIX_HTTP_PORT:-5050}"

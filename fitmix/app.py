@@ -1227,6 +1227,9 @@ def health():
         connection.execute("SELECT 1").fetchone()
     return jsonify({
         "status": "ok",
+        "app_name": "VestiAI",
+        "pid": os.getpid(),
+        "server_instance": os.environ.get("FITMIX_SERVER_INSTANCE", ""),
         "credentials_configured": client.configured,
         "desktop_mode": DESKTOP_MODE,
         "auth_enabled": AUTH_ENABLED,
@@ -1757,4 +1760,4 @@ init_db()
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5050, debug=False, threaded=True, use_reloader=False)
+    app.run(host="127.0.0.1", port=int(os.environ.get("FITMIX_HTTP_PORT", "5050")), debug=False, threaded=True, use_reloader=False)
