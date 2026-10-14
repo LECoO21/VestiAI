@@ -40,6 +40,8 @@
   <div id="credentialBanner" class="credential-banner" hidden>
     百炼凭证尚未配置。请按 README 的 BYOK 说明创建 <code>.env</code>，然后重新启动服务。
   </div>
+  <div id="usageNotice" class="usage-notice" role="status" hidden></div>
+  <section id="taskRecovery" class="task-recovery panel" aria-label="未完成的任务" hidden></section>
 
   <main>
     <section id="looksView" class="studio-grid" role="tabpanel" aria-labelledby="looksTab" hidden>
@@ -221,7 +223,7 @@
         </div>
 
         <div id="tryonEmpty" class="generation-setup" hidden>
-          <div class="generation-head"><div><button id="modifyOutfit" class="back-button">修改搭配</button><h2>试穿看看</h2><p id="generateRequirement" aria-live="polite">还需选择一张全身正面形象照。</p></div><span class="price-pill">基础试穿 · 约 ¥0.20</span></div>
+          <div class="generation-head"><div><button id="modifyOutfit" class="back-button">修改搭配</button><h2>试穿看看</h2><p id="generateRequirement" aria-live="polite">还需选择一张全身正面形象照。</p></div><span id="basicPriceLabel" class="price-pill">基础试穿 · 确认前查看费用</span></div>
           <div class="generation-layout">
             <aside class="generation-outfit"><h3>本次搭配</h3><div id="generationOutfit" class="generation-outfit-list"></div></aside>
             <div>
@@ -240,16 +242,18 @@
               <p id="personSourceNote" class="person-source-note" hidden>正在使用历史试穿中的形象照，不占 6 张形象库名额。</p>
             </div>
           </div>
-          <button id="generateTryon" class="primary-button wide" disabled>试穿看看 · 约 ¥0.20</button>
+          <button id="generateTryon" class="primary-button wide" disabled>试穿看看 · 查看费用</button>
           <p class="cost-note admin-only">高质量试穿只在结果页手动选择，不会自动产生额外费用。</p>
         </div>
         <div id="tryonProgress" class="result-progress" hidden>
           <div class="spinner large"></div><h2>正在生成试穿图</h2><p id="tryonProgressStage">上传素材</p>
           <div class="progress-track"><i id="tryonProgressBar"></i></div>
-          <small>通常数十秒，请保持此页面打开</small>
+          <small>可以刷新页面，回来后继续查看这次任务。</small>
         </div>
         <div id="tryonError" class="result-empty error-state" hidden>
-          <div class="error-mark">!</div><h2>这次没有生成成功</h2><p id="tryonErrorMessage">请检查图片后重试，已经选择的衣服和形象照会保留。</p>
+          <div class="error-mark">!</div><h2 id="tryonErrorTitle">这次没有生成成功</h2><p id="tryonErrorMessage">已经选择的衣服和形象照会保留。</p>
+          <button id="resumeTryonJob" class="primary-button" hidden>继续查询这次任务</button>
+          <button id="retryPendingSubmission" class="primary-button" hidden>查看这次提交</button>
           <button id="dismissTryonError" class="secondary-button">返回试穿设置</button>
         </div>
         <div id="tryonResult" class="result-content" hidden>
@@ -267,7 +271,7 @@
                 <a id="downloadResult" download>下载到本机</a>
                 <button id="retryPerson">更换形象照</button>
                 <button id="viewTryonGarments">查看所用单品</button>
-                <button id="retryPlus" class="admin-only">生成高质量试穿 · 约 ¥0.50</button>
+                <button id="retryPlus" class="admin-only">生成高质量试穿 · 查看费用</button>
               </div>
             </details>
           </div>
@@ -320,8 +324,11 @@
     <div class="dialog-motion-surface">
       <div class="dialog-head"><div><h2 id="generationDialogTitle">确认本次试穿</h2></div><button type="button" class="dialog-close" data-close-dialog aria-label="关闭试穿确认"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <div id="generationSummary" class="generation-summary"></div>
-      <div class="price-confirm"><span>本次模型与预计费用</span><strong id="generationPrice">基础试穿 · 约 ¥0.20</strong></div>
-      <div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog>返回修改</button><button type="button" id="confirmGeneration" class="primary-button">确认生成</button></div>
+      <div class="price-confirm"><span>本次模型与预计费用</span><strong id="generationPrice">正在查询费用</strong></div>
+      <p id="generationBudget" class="settings-help"></p>
+      <p class="settings-help">这里显示估算和本次上限，实际收费以百炼账单为准。点击确认才会开始生成。</p>
+      <p id="generationError" class="access-error" role="alert" hidden></p>
+      <div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog>返回修改</button><button type="button" id="confirmGeneration" class="primary-button" disabled>确认生成</button></div>
     </div>
   </dialog>
 

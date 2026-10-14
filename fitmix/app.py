@@ -5,9 +5,11 @@ import hmac
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import time
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -16,10 +18,11 @@ from pathlib import Path
 from flask import Flask, abort, has_request_context, jsonify, render_template, request, send_from_directory, session
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from .bailian import BailianClient, BailianError
+from .bailian import BailianClient, BailianError, BailianSubmissionUnknown
 from .backup import create_backup
 from .services.context import ServiceError, UserContext
-from .services.tryon import TryonService
+from .services.usage import UsageService, UsagePolicy, backfill_legacy_usage, SCHEMA_SQL as USAGE_SCHEMA
+from .services.tryon import TryonService, SCHEMA_SQL as AUTHORIZATION_SCHEMA
 from .services.wardrobe import (
     WardrobeService, duplicate_map, file_url, garment_json, look_json,
     person_image_json, thumbnail_url, tryon_json,
@@ -169,16 +172,33 @@ def wardrobe_service() -> WardrobeService:
 
 def tryon_service() -> TryonService:
     return TryonService(db, DATA_DIR, reserve_visitor_tryon,
-                        lambda job_id, tryon_id: enqueue(job_id, "tryon", tryon_id, process_tryon, tryon_id))
+                        lambda job_id, tryon_id: enqueue(job_id, "tryon", tryon_id, process_tryon, tryon_id), usage_service())
+
+
+def usage_policy(owner_id: str = "") -> UsagePolicy:
+    estimates = {}
+    for operation in ("recognition", "segmentation", "tryon_basic", "tryon_plus", "recommendation", "agent"):
+        value = runtime_value(f"FITMIX_{operation.upper()}_CENTS")
+        if value:
+            estimates[operation] = int(value)
+    return UsagePolicy(
+        job_limit_cents=int(runtime_value("FITMIX_JOB_BUDGET_CENTS", "100")),
+        user_limit_cents=min(int(runtime_value("FITMIX_USER_BUDGET_CENTS", "1000")), VISITOR_BUDGET_CENTS) if owner_id.startswith("visitor:") else int(runtime_value("FITMIX_USER_BUDGET_CENTS", "1000")),
+        global_limit_cents=GLOBAL_BUDGET_CENTS, estimates=estimates,
+        models={key:runtime_value(f"FITMIX_{key.upper()}_MODEL") for key in ("recommendation","agent") if runtime_value(f"FITMIX_{key.upper()}_MODEL")},
+    )
+
+
+def usage_service(owner_id: str = "") -> UsageService:
+    return UsageService(db, usage_policy(owner_id or (current_owner_id() if has_request_context() else "")))
 
 
 def save_desktop_credentials(workspace_id: str, api_key: str) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = CONFIG_PATH.with_name(f".{CONFIG_PATH.name}.{uuid.uuid4().hex}.tmp")
-    temporary.write_text(
-        f"DASHSCOPE_WORKSPACE_ID={workspace_id}\nDASHSCOPE_API_KEY={api_key}\n",
-        encoding="utf-8",
-    )
+    values = env_values()
+    values.update(DASHSCOPE_WORKSPACE_ID=workspace_id, DASHSCOPE_API_KEY=api_key)
+    temporary.write_text("".join(f"{name}={value}\n" for name,value in values.items()), encoding="utf-8")
     temporary.chmod(0o600)
     os.replace(temporary, CONFIG_PATH)
 
@@ -263,7 +283,7 @@ def unique_garment_name(
     return unique_short_name(preferred or garment_name_base(description, garment_type), used)
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _execute_statements(connection: sqlite3.Connection, script: str) -> None:
@@ -278,14 +298,34 @@ def _execute_statements(connection: sqlite3.Connection, script: str) -> None:
         raise ValueError("数据库迁移包含不完整的 SQL")
 
 
+def _migrate_task_states(connection) -> None:
+    # Rebuild only the old CHECK constraints; retain every column and record.
+    for table in ("jobs", "tryons"):
+        sql = connection.execute("SELECT sql FROM sqlite_master WHERE name=?", (table,)).fetchone()["sql"]
+        if "'unknown'" not in sql:
+            replacement = re.sub(rf'CREATE TABLE\s+(?:"{table}"|{table})(?=\s*\()', f"CREATE TABLE {table}_v2", sql, count=1, flags=re.IGNORECASE)
+            replacement = replacement.replace("'queued', 'running', 'succeeded', 'failed'", "'queued', 'running', 'succeeded', 'failed', 'unknown', 'waiting_result'")
+            connection.execute(replacement)
+            columns = ",".join(row["name"] for row in connection.execute(f"PRAGMA table_info({table})"))
+            connection.execute(f"INSERT INTO {table}_v2({columns}) SELECT {columns} FROM {table}")
+            connection.execute(f"DROP TABLE {table}")
+            connection.execute(f"ALTER TABLE {table}_v2 RENAME TO {table}")
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
+    for name, definition in (("payload_json", "TEXT NOT NULL DEFAULT '{}'"), ("worker_pid", "INTEGER"), ("worker_token", "TEXT")):
+        if name not in columns:
+            connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_entity ON jobs(entity_id)")
+
+
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     existed = DB_PATH.is_file()
+    version = 0
     if existed:
         with sqlite3.connect(DB_PATH) as existing:
             version = existing.execute("PRAGMA user_version").fetchone()[0]
         if version > SCHEMA_VERSION:
-            raise RuntimeError("这份衣橱由较新的 FitMix 创建，请使用对应版本打开")
+            raise RuntimeError("这份衣橱由较新的 VestiAI 创建，请使用对应版本打开")
         if version < SCHEMA_VERSION:
             backup = create_backup(DATA_DIR)
             logger.info("migration backup=%s", backup)
@@ -577,12 +617,13 @@ def init_db() -> None:
             "CREATE UNIQUE INDEX idx_garments_owner_name ON garments(owner_id, label_zh) WHERE draft=0"
         )
 
-        connection.execute(
-            """UPDATE jobs SET status='failed', stage='interrupted', progress=0,
-               error_code='interrupted', error_message='应用已重启，请重新提交任务', updated_at=CURRENT_TIMESTAMP
-               WHERE status IN ('queued', 'running')"""
-        )
-        connection.execute("UPDATE tryons SET status='failed' WHERE status IN ('queued', 'running')")
+        _migrate_task_states(connection)
+        _execute_statements(connection, AUTHORIZATION_SCHEMA)
+        if "confirmed" not in {row["name"] for row in connection.execute("PRAGMA table_info(tryon_authorizations)")}:
+            connection.execute("ALTER TABLE tryon_authorizations ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0")
+        _execute_statements(connection, USAGE_SCHEMA)
+        if version < 2:
+            backfill_legacy_usage(connection,usage_policy())
         broken = connection.execute("PRAGMA foreign_key_check").fetchall()
         if broken:
             raise RuntimeError(f"数据库迁移后存在无效关联：{broken}")
@@ -635,15 +676,27 @@ def save_upload(upload, category: str) -> str:
     return rel_path(destination)
 
 
-def create_job(kind: str, entity_id: str, input_path: str | None = None, owner_id: str | None = None) -> str:
+def create_job(kind: str, entity_id: str, input_path: str | None = None, owner_id: str | None = None, payload: dict | None = None) -> str:
     job_id = uuid.uuid4().hex
     owner_id = owner_id or current_owner_id()
+    payload = payload or {}
     with db() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute("SELECT * FROM jobs WHERE owner_id=? AND entity_id=? AND status IN ('queued','running','unknown','waiting_result') ORDER BY created_at DESC LIMIT 1",(owner_id,entity_id)).fetchone()
+        if existing:
+            if existing["kind"] == kind and json.loads(existing["payload_json"]) == payload:
+                return existing["id"]
+            raise ServiceError("原任务尚未完成，请先查看或核实原任务",409,"active_task")
         connection.execute(
-            """INSERT INTO jobs(id, owner_id, kind, entity_id, status, stage, progress, input_path)
-               VALUES (?, ?, ?, ?, 'queued', 'queued', 0, ?)""",
-            (job_id, owner_id, kind, entity_id, input_path),
-        )
+            """INSERT INTO jobs(id, owner_id, kind, entity_id, status, stage, progress, input_path, payload_json)
+               VALUES (?, ?, ?, ?, 'queued', 'queued', 0, ?, ?)""",
+            (job_id,owner_id,kind,entity_id,input_path,json.dumps(payload)))
+        operations = ["segmentation"]
+        if kind in {"look","tryon_draft"} or kind == "garment" and not payload.get("forced_type"):
+            operations.insert(0,"recognition")
+        if kind in {"look","tryon_draft","garment","parse","garment_parse"}:
+            for operation in operations:
+                usage_service(owner_id).reserve(job_id,owner_id,operation,connection=connection)
     return job_id
 
 
@@ -668,34 +721,165 @@ def set_job(job_id: str, **fields) -> None:
         )
 
 
+WORKER_TOKEN = uuid.uuid4().hex
+_recovery_lock = threading.Lock()
+_recovery_started = False
+
+
+def _alive(pid) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _job_state(job_id: str, state: str, stage: str, message=None, code=None) -> None:
+    with db() as connection:
+        connection.execute("UPDATE jobs SET status=?,stage=?,error_message=?,error_code=?,worker_pid=NULL,worker_token=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                           (state,stage,message,code,job_id))
+        connection.execute("UPDATE tryons SET status=? WHERE id=(SELECT entity_id FROM jobs WHERE id=? AND kind='tryon')", (state,job_id))
+
+
+def paid_call(job_id: str, operation: str, step: str, client, function, *args, async_task=False):
+    """Cache completed paid steps; an uncertain POST is never automatically sent again."""
+    with db() as connection:
+        job = connection.execute("SELECT owner_id FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not job:
+        raise ServiceError("任务不存在",404,"not_found")
+    service = usage_service(job["owner_id"])
+    record = service.reserve(job_id,job["owner_id"],operation,step)
+    if record["status"] == "succeeded" and "result" in record["usage"]:
+        return record["usage"]["result"]
+    if record["status"] != "reserved":
+        raise BailianSubmissionUnknown("这个收费步骤已提交，请核实原请求，未重复提交")
+    attempted = False
+    def on_submitting():
+        nonlocal attempted
+        with db() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute("SELECT status FROM model_usage WHERE id=?", (record["id"],)).fetchone()
+            if not current or current["status"] != "reserved":
+                raise ServiceError("原请求已进入提交，请查看原任务",409,"call_in_progress")
+            service.settle(record["id"],"submitted",connection=connection)
+            connection.execute("UPDATE jobs SET stage=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (f"submitting_{step}",job_id))
+        attempted = True
+    try:
+        result = function(*args,on_submitting=on_submitting)
+    except Exception as exc:
+        if isinstance(exc,ServiceError) and exc.code == "call_in_progress":
+            raise BailianSubmissionUnknown(str(exc)) from exc
+        state = "unknown" if isinstance(exc,BailianSubmissionUnknown) else "failed" if attempted else "released"
+        service.settle(record["id"],state,usage={"reported_usage":getattr(client,"last_usage",{"availability":"not_reported"})})
+        raise
+    with db() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        service.settle(record["id"],"submitted" if async_task else "succeeded",
+                       usage={"result":result,"reported_usage":getattr(client,"last_usage",{"availability":"not_reported"}),
+                              "input_images": (1 if operation in {"recognition","segmentation"} else sum(arg is not None for arg in args[:3]))},
+                       connection=connection)
+        if async_task:
+            connection.execute("UPDATE jobs SET remote_task_id=?,remote_request_id=?,stage='generating',progress=45 WHERE id=?",(result[0],result[1],job_id))
+    return result
+
+
 def run_job(job_id: str, kind: str, entity_id: str, function, *args) -> None:
     started = time.monotonic()
-    set_job(job_id, status="running", stage="starting", progress=2)
-    logger.info("job=%s kind=%s entity=%s started", job_id, kind, entity_id)
+    with db() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        claimed = connection.execute("UPDATE jobs SET status='running',worker_pid=?,worker_token=?,error_code=NULL,error_message=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'",(os.getpid(),WORKER_TOKEN,job_id)).rowcount
+    if not claimed:
+        return
+    logger.info("job=%s kind=%s entity=%s started",job_id,kind,entity_id)
     try:
-        function(job_id, *args)
-        set_job(job_id, status="succeeded", stage="done", progress=100)
-        logger.info("job=%s kind=%s succeeded elapsed=%.1fs", job_id, kind, time.monotonic() - started)
+        function(job_id,*args)
+        _job_state(job_id,"succeeded","done")
+        set_job(job_id,progress=100)
     except Exception as exc:
-        code = exc.code if isinstance(exc, BailianError) else "internal_error"
-        message = str(exc)[:300] or "任务失败"
-        request_id = exc.request_id if isinstance(exc, BailianError) else None
-        set_job(
-            job_id,
-            status="failed",
-            stage="failed",
-            error_code=code,
-            error_message=message,
-            remote_request_id=request_id,
-        )
-        if kind == "tryon":
-            with db() as connection:
-                connection.execute("UPDATE tryons SET status='failed' WHERE id=?", (entity_id,))
-        logger.exception("job=%s kind=%s failed code=%s elapsed=%.1fs", job_id, kind, code, time.monotonic() - started)
+        code = exc.code if isinstance(exc,(BailianError,ServiceError)) else "internal_error"
+        message = str(exc)[:300] or "任务尚未完成"
+        with db() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for pending in connection.execute("SELECT id FROM model_usage WHERE job_id=? AND status='reserved'",(job_id,)).fetchall():
+                usage_service().settle(pending["id"],"released",connection=connection)
+            if code == "tryon_failed":
+                for submitted in connection.execute("SELECT id FROM model_usage WHERE job_id=? AND status IN ('submitted','unknown')",(job_id,)).fetchall():
+                    usage_service().settle(submitted["id"],"failed",connection=connection)
+            row = connection.execute("SELECT remote_task_id FROM jobs WHERE id=?",(job_id,)).fetchone()
+            steps = connection.execute("SELECT status FROM model_usage WHERE job_id=?",(job_id,)).fetchall()
+        if isinstance(exc,BailianSubmissionUnknown) or code == "task_unknown" or any(item["status"] in {"unknown","submitted"} for item in steps) and not (row and row["remote_task_id"]):
+            state,stage = "unknown","pending_verification"
+            message += "；提交结果待核实，未重新生成"
+        elif row and row["remote_task_id"] and code != "tryon_failed":
+            state,stage = "waiting_result","waiting_result"
+            message += "；可继续查询原任务，不会再次生成"
+        else:
+            state,stage = "failed","failed"
+        _job_state(job_id,state,stage,message,code)
+        if isinstance(exc,BailianError) and exc.request_id:
+            set_job(job_id,remote_request_id=exc.request_id)
+        logger.warning("job=%s kind=%s state=%s code=%s",job_id,kind,state,code)
 
 
 def enqueue(job_id: str, kind: str, entity_id: str, function, *args) -> None:
-    executor.submit(run_job, job_id, kind, entity_id, function, *args)
+    try:
+        executor.submit(run_job,job_id,kind,entity_id,function,*args)
+    except RuntimeError:
+        _job_state(job_id,"waiting_result","queue_unavailable","后台暂时无法启动，可继续处理原任务","queue_unavailable")
+
+
+def _dispatch(row) -> None:
+    payload = json.loads(row["payload_json"] or "{}")
+    kind,entity = row["kind"],row["entity_id"]
+    if kind == "tryon":
+        function,args = process_tryon,(entity,)
+    elif kind in {"look","tryon_draft"}:
+        function,args = process_look,(entity,)
+    elif kind == "garment" and row["input_path"]:
+        function,args = process_direct_garment,(entity,row["input_path"],payload.get("forced_type"),row["owner_id"])
+    elif kind == "parse" and payload.get("types"):
+        function,args = process_manual_parse,(entity,payload["types"])
+    elif kind == "garment_parse" and payload.get("type"):
+        function,args = process_reparse_garment,(entity,payload["type"])
+    else:
+        _job_state(row["id"],"unknown","pending_verification","旧任务缺少恢复参数，请核实结果；未重新提交","recovery_missing")
+        return
+    enqueue(row["id"],kind,entity,function,*args)
+
+
+def recover_jobs() -> None:
+    dispatch = []
+    with db() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute("SELECT * FROM jobs WHERE status IN ('queued','running','waiting_result')").fetchall()
+        for row in rows:
+            if _alive(row["worker_pid"]):
+                continue
+            steps = connection.execute("SELECT status FROM model_usage WHERE job_id=?",(row["id"],)).fetchall()
+            uncertain = any(step["status"] in {"submitted","unknown"} for step in steps)
+            if not row["remote_task_id"] and (uncertain or row["stage"].startswith("submitting") or row["status"] == "running" and not steps):
+                connection.execute("UPDATE jobs SET status='unknown',stage='pending_verification',worker_pid=NULL,worker_token=NULL,error_code='submission_unknown',error_message='上次提交结果待核实，未重新生成' WHERE id=?",(row["id"],))
+                connection.execute("UPDATE tryons SET status='unknown' WHERE id=? AND ?='tryon'",(row["entity_id"],row["kind"]))
+                for step in connection.execute("SELECT id,status FROM model_usage WHERE job_id=? AND status IN ('reserved','submitted')",(row["id"],)).fetchall():
+                    usage_service().settle(step["id"],"unknown",connection=connection)
+                continue
+            connection.execute("UPDATE jobs SET status='queued',worker_pid=NULL,worker_token=NULL WHERE id=?",(row["id"],))
+            dispatch.append(dict(row))
+    for row in dispatch:
+        _dispatch(row)
+
+
+@app.before_request
+def recover_once():
+    global _recovery_started
+    if runtime_value("FITMIX_RECOVERY_DISABLED") == "1" or _recovery_started:
+        return
+    with _recovery_lock:
+        if not _recovery_started:
+            recover_jobs()
+            _recovery_started = True
 
 
 def matching_garment_id(
@@ -737,7 +921,7 @@ def store_parsed_garments(job_id: str, look_id: str, specs: list[dict], replace_
     old_by_type = {row["type"]: row for row in old_rows}
     source = DATA_DIR / look["source_path"]
     set_job(job_id, stage="parsing", progress=45)
-    parsed = client.parse_garments(source, replace_types)
+    parsed = paid_call(job_id,"segmentation","segmentation",client,client.parse_garments,source,replace_types)
     spec_by_type = {item["type"]: item for item in specs}
     new_rows = []
     for index, item in enumerate(parsed):
@@ -817,7 +1001,8 @@ def process_look(job_id: str, look_id: str) -> None:
     if not look:
         raise BailianError("not_found", "穿搭记录不存在")
     set_job(job_id, stage="analyzing", progress=10)
-    analysis = bailian_client().analyze_look(DATA_DIR / look["source_path"], look["source_kind"])
+    client = bailian_client()
+    analysis = paid_call(job_id,"recognition","recognition",client,client.analyze_look,DATA_DIR / look["source_path"],look["source_kind"])
     with db() as connection:
         connection.execute(
             """UPDATE looks SET title_en=?, style_zh=?, seasons=?, palette=?, raw_analysis=? WHERE id=?""",
@@ -957,11 +1142,11 @@ def process_direct_garment(
             }]
             seasons = []
         else:
-            analysis = client.analyze_look(source, "wardrobe")
+            analysis = paid_call(job_id,"recognition","recognition",client,client.analyze_look,source,"wardrobe")
             specs = analysis["garments"]
             seasons = analysis["seasons"]
         set_job(job_id, stage="parsing", progress=45)
-        parsed_items = client.parse_garments(source, [item["type"] for item in specs])
+        parsed_items = paid_call(job_id,"segmentation","segmentation",client,client.parse_garments,source,[item["type"] for item in specs])
         spec_by_type = {item["type"]: item for item in specs}
         prepared = []
         for index, parsed in enumerate(parsed_items):
@@ -1009,14 +1194,14 @@ def process_direct_garment(
                     ),
                 )
                 kept += 1
-        if not kept:
-            source.unlink(missing_ok=True)
         with db() as connection:
             rows = connection.execute(
                 "SELECT crop_path, mask_path FROM garments WHERE owner_id=? AND source_path=?",
                 (owner_id, stored_source),
             ).fetchall()
             referenced = {stored for row in rows for stored in (row["crop_path"], row["mask_path"]) if stored}
+        if not kept and not rows:
+            source.unlink(missing_ok=True)
         for path in created_files:
             if rel_path(path) not in referenced:
                 path.unlink(missing_ok=True)
@@ -1040,7 +1225,7 @@ def process_reparse_garment(job_id: str, garment_id: str, garment_type: str) -> 
         raise BailianError("source_missing", "原始图片已经不存在，请重新添加这件单品")
     set_job(job_id, stage="parsing", progress=35)
     client = bailian_client()
-    parsed = client.parse_garments(DATA_DIR / stored_source, [garment_type])[0]
+    parsed = paid_call(job_id,"segmentation","segmentation",client,client.parse_garments,DATA_DIR / stored_source,[garment_type])[0]
     crop_path = DATA_DIR / "garments" / f"{uuid.uuid4().hex}-rgb.png"
     mask_path = DATA_DIR / "garments" / f"{uuid.uuid4().hex}-rgba.png" if parsed.get("parsing_url") else None
     client.download(parsed["crop_url"], crop_path)
@@ -1069,33 +1254,42 @@ def process_reparse_garment(job_id: str, garment_id: str, garment_type: str) -> 
 
 def process_tryon(job_id: str, tryon_id: str) -> None:
     with db() as connection:
-        row = connection.execute("SELECT * FROM tryons WHERE id=?", (tryon_id,)).fetchone()
-        connection.execute("UPDATE tryons SET status='running' WHERE id=?", (tryon_id,))
-    if not row:
-        raise BailianError("not_found", "试穿记录不存在")
-    top_path = row["dress_path"] or row["upper_path"]
-    bottom_path = None if row["dress_path"] else row["lower_path"]
-    if not top_path and not bottom_path:
-        raise BailianError("garment_missing", "所选衣物已经不存在")
-    set_job(job_id, stage="uploading", progress=18)
+        row = connection.execute("SELECT * FROM tryons WHERE id=?",(tryon_id,)).fetchone()
+        job = connection.execute("SELECT * FROM jobs WHERE id=?",(job_id,)).fetchone()
+        connection.execute("UPDATE tryons SET status='running' WHERE id=?",(tryon_id,))
+    if not row or not job:
+        raise BailianError("not_found","试穿记录不存在")
     client = bailian_client()
-    task_id, request_id = client.submit_tryon(
-        DATA_DIR / row["person_path"],
-        DATA_DIR / top_path if top_path else None,
-        DATA_DIR / bottom_path if bottom_path else None,
-        row["quality"],
-    )
-    set_job(job_id, stage="generating", progress=45, remote_task_id=task_id, remote_request_id=request_id)
-    logger.info("job=%s remote_task=%s remote_request=%s", job_id, task_id, request_id or "-")
+    task_id = job["remote_task_id"]
+    if not task_id:
+        top_path = row["dress_path"] or row["upper_path"]
+        bottom_path = None if row["dress_path"] else row["lower_path"]
+        if not top_path and not bottom_path:
+            raise BailianError("garment_missing","所选衣物已经不存在")
+        set_job(job_id,stage="uploading",progress=18)
+        task_id,request_id = paid_call(job_id,f"tryon_{row['quality']}","tryon",client,client.submit_tryon,
+            DATA_DIR / row["person_path"],DATA_DIR / top_path if top_path else None,
+            DATA_DIR / bottom_path if bottom_path else None,row["quality"],async_task=True)
+        logger.info("job=%s remote_task=%s remote_request=%s",job_id,task_id,request_id or "-")
+    set_job(job_id,stage="generating",progress=45)
     result_url = client.wait_tryon(task_id)
-    set_job(job_id, stage="downloading_result", progress=88)
-    destination = DATA_DIR / "tryons" / f"{uuid.uuid4().hex}.png"
-    client.download(result_url, destination)
+    set_job(job_id,stage="downloading_result",progress=88)
+    destination = DATA_DIR / "tryons" / f"{tryon_id}-result.png"
+    client.download(result_url,destination)
+    try:
+        with Image.open(destination) as image:
+            image.verify()
+    except (OSError,UnidentifiedImageError) as exc:
+        destination.unlink(missing_ok=True)
+        raise BailianError("invalid_result","试穿结果图片暂时无法读取，请继续查询原任务") from exc
     with db() as connection:
-        connection.execute(
-            "UPDATE tryons SET status='succeeded', result_path=? WHERE id=?",
-            (rel_path(destination), tryon_id),
-        )
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("UPDATE tryons SET status='succeeded',result_path=? WHERE id=?",(rel_path(destination),tryon_id))
+        usage = connection.execute("SELECT id,status,usage_json FROM model_usage WHERE job_id=? AND step='tryon'",(job_id,)).fetchone()
+        if usage and usage["status"] != "succeeded":
+            details = json.loads(usage["usage_json"])
+            details["reported_usage"] = getattr(client,"last_usage",{"availability":"not_reported"})
+            usage_service().settle(usage["id"],"succeeded",usage=details,connection=connection)
 
 
 def quota_json(owner_id: str) -> dict:
@@ -1104,7 +1298,7 @@ def quota_json(owner_id: str) -> dict:
             "SELECT basic_tryons, spent_cents FROM demo_usage WHERE owner_id=?", (owner_id,)
         ).fetchone()
     used = row["basic_tryons"] if row else 0
-    spent = row["spent_cents"] if row else 0
+    spent = usage_service(owner_id).summary(owner_id)["committed_cents"]
     return {
         "remaining_tryons": max(0, VISITOR_TRYON_LIMIT - used),
         "remaining_cents": max(0, VISITOR_BUDGET_CENTS - spent),
@@ -1116,8 +1310,8 @@ def reserve_visitor_tryon(connection: sqlite3.Connection, owner_id: str) -> bool
         "SELECT basic_tryons, spent_cents FROM demo_usage WHERE owner_id=?", (owner_id,)
     ).fetchone()
     used = row["basic_tryons"] if row else 0
-    spent = row["spent_cents"] if row else 0
-    global_spent = connection.execute("SELECT COALESCE(SUM(spent_cents), 0) FROM demo_usage").fetchone()[0]
+    spent = connection.execute("SELECT COALESCE(SUM(estimated_cents),0) FROM model_usage WHERE owner_id=? AND amount_state<>'released'", (owner_id,)).fetchone()[0]
+    global_spent = connection.execute("SELECT COALESCE(SUM(estimated_cents),0) FROM model_usage WHERE amount_state<>'released'").fetchone()[0]
     if (
         used >= VISITOR_TRYON_LIMIT
         or spent + BASIC_TRYON_CENTS > VISITOR_BUDGET_CENTS
@@ -1161,6 +1355,7 @@ def auth_status():
         "required": AUTH_ENABLED,
         "authenticated": authenticated,
         "role": role,
+        "owner_key": current_owner_id() if authenticated else None,
         "quota": quota_json(current_owner_id()) if authenticated and role == "visitor" else None,
     })
 
@@ -1331,7 +1526,13 @@ def create_look_route():
             "INSERT INTO looks(id, owner_id, source_path, source_kind) VALUES (?, ?, ?, ?)",
             (look_id, owner_id, source_path, source_kind),
         )
-    job_id = create_job("look", look_id, owner_id=owner_id)
+    try:
+        job_id = create_job("look", look_id, owner_id=owner_id)
+    except Exception:
+        with db() as connection:
+            connection.execute("DELETE FROM looks WHERE id=?", (look_id,))
+        (DATA_DIR / source_path).unlink(missing_ok=True)
+        raise
     enqueue(job_id, "look", look_id, process_look, look_id)
     return jsonify({"look_id": look_id, "job_id": job_id}), 202
 
@@ -1349,7 +1550,13 @@ def create_tryon_draft():
             "INSERT INTO looks(id, owner_id, source_path, source_kind, draft) VALUES (?, ?, ?, 'composition', 1)",
             (look_id, owner_id, source_path),
         )
-    job_id = create_job("tryon_draft", look_id, owner_id=owner_id)
+    try:
+        job_id = create_job("tryon_draft", look_id, owner_id=owner_id)
+    except Exception:
+        with db() as connection:
+            connection.execute("DELETE FROM looks WHERE id=?", (look_id,))
+        (DATA_DIR / source_path).unlink(missing_ok=True)
+        raise
     enqueue(job_id, "tryon_draft", look_id, process_look, look_id)
     return jsonify({"draft_id": look_id, "job_id": job_id}), 202
 
@@ -1377,6 +1584,45 @@ def create_look_from_garments():
         return api_error("请提供 JSON 对象和 garment_ids 数组")
     garment_ids = body.get("garment_ids") or []
     return jsonify(wardrobe_service().save_outfit(current_user(), garment_ids)), 201
+
+
+@app.get("/api/usage")
+def get_usage():
+    service = usage_service()
+    result = service.summary(current_owner_id())
+    result.update(operations=dict(service.policy.estimates),remaining_cents=result["user_remaining_cents"])
+    return jsonify(result)
+
+
+@app.get("/api/jobs")
+def list_jobs():
+    with db() as connection:
+        rows = connection.execute("SELECT id FROM jobs WHERE owner_id=? AND status IN ('queued','running','unknown','waiting_result') ORDER BY created_at DESC",(current_owner_id(),)).fetchall()
+    return jsonify({"items":[wardrobe_service().job(current_user(),row["id"]) for row in rows]})
+
+
+@app.post("/api/jobs/<job_id>/resume")
+def resume_job(job_id: str):
+    with db() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute("SELECT * FROM jobs WHERE id=? AND owner_id=?",(job_id,current_owner_id())).fetchone()
+        if not row:
+            return api_error("任务不存在",404,"not_found")
+        if row["status"] == "succeeded" or row["status"] == "running" and _alive(row["worker_pid"]):
+            return jsonify({"job_id":job_id,"entity_id":row["entity_id"],"kind":row["kind"]}),202
+        if row["remote_task_id"]:
+            permitted = row["kind"] == "tryon" and row["status"] != "failed"
+        else:
+            steps = connection.execute("SELECT status FROM model_usage WHERE job_id=?",(job_id,)).fetchall()
+            permitted = row["status"] != "unknown" and all(step["status"] in {"reserved","succeeded"} for step in steps)
+            if row["status"] == "failed":
+                permitted = permitted and bool(steps) and all(step["status"] == "succeeded" for step in steps)
+        if not permitted:
+            return api_error("原提交结果需要核实，不能重新发送收费请求",409,"not_resumable")
+        connection.execute("UPDATE jobs SET status='queued',worker_pid=NULL,worker_token=NULL,error_code=NULL,error_message=NULL WHERE id=?",(job_id,))
+        connection.execute("UPDATE tryons SET status='queued' WHERE id=? AND ?='tryon'",(row["entity_id"],row["kind"]))
+    _dispatch(row)
+    return jsonify({"job_id":job_id,"entity_id":row["entity_id"],"kind":row["kind"]}),202
 
 
 @app.get("/api/jobs/<job_id>")
@@ -1427,7 +1673,11 @@ def create_garment_route():
     except ValueError as exc:
         return api_error(str(exc))
     garment_id = uuid.uuid4().hex
-    job_id = create_job("garment", garment_id, source_path, owner_id)
+    try:
+        job_id = create_job("garment", garment_id, source_path, owner_id)
+    except Exception:
+        (DATA_DIR / source_path).unlink(missing_ok=True)
+        raise
     enqueue(job_id, "garment", garment_id, process_direct_garment, garment_id, source_path, None, owner_id)
     return jsonify({"garment_id": garment_id, "job_id": job_id}), 202
 
@@ -1452,7 +1702,7 @@ def retry_failed_garment(job_id: str):
         return api_error("这个任务不能手动重试", 409, "not_retryable")
     if not (DATA_DIR / old_job["input_path"]).exists():
         return api_error("原始图片已经不存在，请重新添加", 409, "source_missing")
-    new_job_id = create_job("garment", old_job["entity_id"], old_job["input_path"], owner_id)
+    new_job_id = create_job("garment", old_job["entity_id"], old_job["input_path"], owner_id, payload={"forced_type": garment_type})
     enqueue(
         new_job_id,
         "garment",
@@ -1482,7 +1732,7 @@ def retry_parse(look_id: str):
         ).fetchone()
     if not exists:
         return api_error("穿搭不存在", 404, "not_found")
-    job_id = create_job("parse", look_id, owner_id=owner_id)
+    job_id = create_job("parse", look_id, owner_id=owner_id, payload={"types": garment_types})
     enqueue(job_id, "parse", look_id, process_manual_parse, look_id, garment_types)
     return jsonify({"look_id": look_id, "job_id": job_id}), 202
 
@@ -1561,7 +1811,7 @@ def reparse_garment(garment_id: str):
         ).fetchone()
     if not exists:
         return api_error("衣物不存在", 404, "not_found")
-    job_id = create_job("garment_parse", garment_id, owner_id=owner_id)
+    job_id = create_job("garment_parse", garment_id, owner_id=owner_id, payload={"type": garment_type})
     enqueue(job_id, "garment_parse", garment_id, process_reparse_garment, garment_id, garment_type)
     return jsonify({"garment_id": garment_id, "job_id": job_id}), 202
 
@@ -1607,36 +1857,56 @@ def merge_garment(garment_id: str):
     return jsonify({"merged_id": garment_id, "kept_id": target_id})
 
 
-@app.post("/api/tryons")
-def create_tryon_route():
+@app.post("/api/tryon-authorizations")
+def authorize_tryon_route():
+    origin = request.headers.get("Origin")
+    if origin and origin.rstrip("/") != request.host_url.rstrip("/"):
+        return api_error("请从本应用确认生成",403,"invalid_origin")
     uploaded_person = None
     try:
         upload = request.files.get("person")
         if upload and upload.filename:
-            uploaded_person = save_upload(upload, "tryons")
-        created = tryon_service().create(
-            current_user(), {kind: request.form.get(f"{kind}_id") or None for kind in ("upper", "lower", "dress")},
-            quality=request.form.get("quality", "basic"),
-            person_image_id=request.form.get("person_image_id") or None,
-            source_tryon_id=request.form.get("source_tryon_id") or None,
-            uploaded_person_path=uploaded_person,
-            draft_look_id=request.form.get("draft_look_id") or None,
-        )
-        return jsonify(created), 202
+            uploaded_person = save_upload(upload,"tryons")
+        prepared = tryon_service().authorize(
+            current_user(),{kind:request.form.get(f"{kind}_id") or None for kind in ("upper","lower","dress")},
+            quality=request.form.get("quality","basic"),person_image_id=request.form.get("person_image_id") or None,
+            source_tryon_id=request.form.get("source_tryon_id") or None,uploaded_person_path=uploaded_person,
+            draft_look_id=request.form.get("draft_look_id") or None,action=request.form.get("action","new"))
+        return jsonify(prepared),201
     except Exception as exc:
         if uploaded_person:
-            with db() as connection:
-                referenced = connection.execute("SELECT 1 FROM tryons WHERE person_path=?", (uploaded_person,)).fetchone()
-            if not referenced:
-                (DATA_DIR / uploaded_person).unlink(missing_ok=True)
-        if isinstance(exc, ValueError) and not isinstance(exc, ServiceError):
+            (DATA_DIR/uploaded_person).unlink(missing_ok=True)
+        if isinstance(exc,ValueError) and not isinstance(exc,ServiceError):
             return api_error(str(exc))
         raise
 
 
+@app.post("/api/tryon-authorizations/<authorization_id>/confirm")
+def confirm_tryon_route(authorization_id: str):
+    origin = request.headers.get("Origin")
+    if origin and origin.rstrip("/") != request.host_url.rstrip("/"):
+        return api_error("请从本应用确认生成",403,"invalid_origin")
+    body = request.get_json(silent=True)
+    if not isinstance(body,dict) or set(body) != {"request_id"}:
+        return api_error("请确认已展示的本次生成范围")
+    return jsonify(tryon_service().confirm(current_user(),authorization_id,body["request_id"]))
+
+
+@app.post("/api/tryons")
+def create_tryon_route():
+    body = request.get_json(silent=True)
+    if not isinstance(body,dict) or not body.get("authorization_id") or not body.get("request_id"):
+        return api_error("请先确认本次试穿和费用",403,"authorization_required")
+    if set(body) != {"authorization_id","request_id"}:
+        return api_error("生成范围已改变，请重新确认",409,"authorization_mismatch")
+    return jsonify(tryon_service().create(current_user(),**body)),202
+
+
 @app.post("/api/tryons/<tryon_id>/retry")
 def retry_tryon_plus(tryon_id: str):
-    return jsonify(tryon_service().plus(current_user(), tryon_id)), 202
+    if current_role() == "visitor":
+        return api_error("高质量试穿仅管理员可用",403,"admin_only")
+    return api_error("请先确认高质量试穿和本次费用",403,"authorization_required")
 
 
 @app.get("/api/tryons")

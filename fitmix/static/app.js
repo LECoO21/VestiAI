@@ -19,6 +19,9 @@ const state = {
   currentTryonId: null,
   selectedGarmentId: null,
   pendingGeneration: null,
+  trackedJobs: {},
+  ownerKey: null,
+  usage: null,
   auth: null,
   failedLook: null,
   failedGarmentJob: null,
@@ -40,7 +43,14 @@ const stageNames = {
   generating: "AI 正在生成试穿图",
   downloading_result: "把结果保存到本机",
   done: "完成",
+  submitting: "正在提交，请勿重复生成",
+  unknown: "提交结果待核实",
+  waiting_result: "等待继续查询",
+  recovering: "正在查询原任务",
 };
+
+const taskStatusNames = { queued: "等待处理", running: "处理中", unknown: "待核实", waiting_result: "等待查询", failed: "未完成", succeeded: "已完成" };
+const activePolls = new Map();
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
@@ -90,8 +100,132 @@ async function api(url, options) {
   return response.status === 204 ? null : response.json();
 }
 
+function money(cents) {
+  return typeof cents === "number" && Number.isFinite(cents) ? `¥${(cents / 100).toFixed(2)}` : "尚未配置";
+}
+
+function workStorageKey() {
+  return state.ownerKey ? `vestiai:work:${encodeURIComponent(state.ownerKey)}` : null;
+}
+
+function saveWork() {
+  const key = workStorageKey();
+  if (!key) return;
+  try { localStorage.setItem(key, JSON.stringify({ pendingGeneration: state.pendingGeneration, jobs: state.trackedJobs })); }
+  catch (_) { /* A restricted browser may disable local storage; the server still keeps tasks. */ }
+  renderTaskRecovery();
+}
+
+function restoreWork(ownerKey) {
+  if (state.ownerKey === ownerKey) return;
+  state.ownerKey = ownerKey;
+  state.pendingGeneration = null;
+  state.trackedJobs = {};
+  state.usage = null;
+  const key = workStorageKey();
+  if (key) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || "{}");
+      const pending = saved.pendingGeneration;
+      if (pending?.authorization_id && pending.request_id) state.pendingGeneration = pending;
+      for (const [id, job] of Object.entries(saved.jobs || {})) {
+        if (job?.jobId === id && typeof job.context === "string" && typeof job.entityId === "string") state.trackedJobs[id] = job;
+      }
+    } catch (_) { /* Invalid saved UI state does not affect server-side tasks. */ }
+  }
+  renderTaskRecovery();
+}
+
+function trackJob(jobId, context, entityId, job = {}) {
+  if (!jobId) return;
+  state.trackedJobs[jobId] = { ...state.trackedJobs[jobId], jobId, context, entityId, status: job.status || "queued", stage: job.stage || "queued", canResume: job.can_resume === true, message: job.error?.message || job.error_message || "" };
+  saveWork();
+}
+
+function forgetJob(jobId) {
+  delete state.trackedJobs[jobId];
+  saveWork();
+}
+
+function renderTaskRecovery() {
+  const panel = $("#taskRecovery");
+  if (!panel) return;
+  const pending = state.pendingGeneration?.submissionAttempted;
+  const jobs = Object.values(state.trackedJobs);
+  panel.hidden = !pending && jobs.length === 0;
+  if (panel.hidden) return;
+  panel.innerHTML = `<h2>继续查看之前的任务</h2>${pending ? '<div class="recovery-row"><p><strong>试穿提交结果暂未收到</strong><span>这次提交已经保存，继续查看会复用原请求。</span></p><button class="secondary-button" data-pending-submission>查看这次提交</button></div>' : ""}${jobs.map((job) => `<div class="recovery-row"><p><strong>${job.context === "tryon" ? "试穿" : "衣物整理"} · ${taskStatusNames[job.status] || "处理中"}</strong><span>${escapeHtml(job.status === "unknown" ? "可能已经提交，请先核实，勿重复生成。" : job.message || stageNames[job.stage] || "可以继续查看原任务。")}</span></p><button class="secondary-button" data-recovery-job="${escapeHtml(job.jobId)}">${job.canResume || job.status === "waiting_result" ? "继续查询" : "查看状态"}</button>${job.status === "failed" ? `<button class="text-button" data-dismiss-job="${escapeHtml(job.jobId)}">收起</button>` : ""}</div>`).join("")}`;
+  panel.querySelector("[data-pending-submission]")?.addEventListener("click", retryPendingSubmission);
+  panel.querySelectorAll("[data-recovery-job]").forEach((button) => button.addEventListener("click", () => recoverTrackedJob(button.dataset.recoveryJob)));
+  panel.querySelectorAll("[data-dismiss-job]").forEach((button) => button.addEventListener("click", () => forgetJob(button.dataset.dismissJob)));
+}
+
+async function loadUsage() {
+  const usage = await api("/api/usage");
+  state.usage = usage;
+  const basic = usage.operations?.tryon_basic;
+  $("#basicPriceLabel").textContent = `基础试穿 · ${money(basic)}`;
+  const notice = $("#usageNotice");
+  notice.hidden = false;
+  const missing = usage.operations?.recognition == null || usage.operations?.segmentation == null;
+  notice.textContent = `本次可用预算 ${money(usage.remaining_cents)}。${missing ? "识别或分割价格尚未配置，请先由服务端设置费用上限后再导入图片。" : `导入一张图片会调用识别和分割，约 ${money(usage.operations.recognition + usage.operations.segmentation)}；重新识别轮廓约 ${money(usage.operations.segmentation)}。`}试穿会另行确认费用，实际收费以百炼账单为准。${usage.unknown_cents > 0 ? `另有 ${money(usage.unknown_cents)} 费用待核实，仍计入预算。` : ""}`;
+  return usage;
+}
+
+async function checkImportCosts(recognition = true) {
+  const usage = await loadUsage();
+  if (usage.operations?.segmentation == null || (recognition && usage.operations?.recognition == null)) {
+    throw new Error("这次需要的识别或分割价格尚未配置，请先由服务端设置费用上限。图片尚未提交。");
+  }
+}
+
+function contextForKind(kind) {
+  return ({ tryon_draft: "draft", look: "look", parse: "parse", garment: "garment", garment_parse: "garment_parse", tryon: "tryon" })[kind] || "look";
+}
+
+async function recoverSavedWork() {
+  // The server owns the identity; local storage only remembers work for that identity.
+  const ownerKey = state.ownerKey;
+  try {
+    const active = await api("/api/jobs?active=1");
+    if (state.ownerKey !== ownerKey) return;
+    for (const job of active.items || []) trackJob(job.id, contextForKind(job.kind), job.entity_id, job);
+  } catch (_) { /* Stored jobs and try-on history remain a recovery path if listing fails. */ }
+  for (const item of state.tryons) {
+    if (item.job_id && ["queued", "running", "unknown", "waiting_result"].includes(item.status)) {
+      trackJob(item.job_id, "tryon", item.id, item);
+    }
+  }
+  for (const job of Object.values(state.trackedJobs)) {
+    try {
+      const current = await api(`/api/jobs/${job.jobId}`);
+      if (state.ownerKey !== ownerKey) return;
+      trackJob(job.jobId, job.context, job.entityId, current);
+      if (current.status === "succeeded") forgetJob(job.jobId);
+      else if (["queued", "running"].includes(current.status)) void pollJob(job.jobId, job.context, job.entityId).catch((error) => toast(error.message, true));
+    } catch (error) {
+      if (error.status === 404) forgetJob(job.jobId);
+    }
+  }
+  if (state.pendingGeneration?.submissionAttempted) showPendingSubmission();
+}
+
+async function recoverTrackedJob(jobId) {
+  const tracked = state.trackedJobs[jobId];
+  if (!tracked) return;
+  if (tracked.context === "tryon") { switchView("tryon"); state.currentTryonId = tracked.entityId; }
+  else switchView(tracked.context.startsWith("garment") ? "wardrobe" : tracked.context === "draft" ? "tryon" : "looks");
+  try {
+    if (tracked.canResume || tracked.status === "waiting_result") {
+      await api(`/api/jobs/${jobId}/resume`, { method: "POST" });
+    }
+    await pollJob(jobId, tracked.context, tracked.entityId);
+  } catch (error) { toast(error.message, true); }
+}
+
 function applyAuthState(auth) {
   state.auth = auth;
+  restoreWork(auth.authenticated && auth.owner_key ? auth.owner_key : null);
   $("#accessGate").hidden = !auth.required || auth.authenticated;
   $("#accountButton").hidden = !auth.required || !auth.authenticated;
   const visitor = auth.role === "visitor";
@@ -120,7 +254,10 @@ async function login(event) {
     });
     $("#accessPassword").value = "";
     applyAuthState({ ...auth, required: true });
+    await loadAuthStatus();
     await loadData();
+    await loadUsage();
+    await recoverSavedWork();
   } catch (error) {
     errorText.textContent = error.message;
     errorText.hidden = false;
@@ -471,7 +608,7 @@ async function openGarmentDetail(garmentId) {
         : garment.seasons.includes(input.value);
     });
     $("#garmentMeta").innerHTML = `<span>来源：${garment.source_look ? `穿搭“${escapeHtml(lookDisplayTitle(garment.source_look))}”` : garment.source_kind === "direct" ? "直接添加" : "原穿搭已删除"}</span><span>添加时间：${escapeHtml(garment.created_at)}</span>`;
-    $("#garmentUsage").innerHTML = `<h3>试穿使用记录 · ${garment.used_tryons.length}</h3>${garment.used_tryons.length ? `<div>${garment.used_tryons.map((item, index) => `<button type="button" data-dialog-tryon="${item.id}" aria-label="${item.status === "succeeded" ? `查看第 ${index + 1} 次试穿结果` : `第 ${index + 1} 次试穿生成失败`}"><img src="${item.result_thumbnail_url || item.result_url || item.person_url}" loading="lazy" decoding="async" alt=""><span>${item.status === "succeeded" ? "查看结果" : "生成失败"}</span></button>`).join("")}</div>` : "<p>这件单品还没有用于试穿。</p>"}`;
+    $("#garmentUsage").innerHTML = `<h3>试穿使用记录 · ${garment.used_tryons.length}</h3>${garment.used_tryons.length ? `<div>${garment.used_tryons.map((item, index) => `<button type="button" data-dialog-tryon="${item.id}" aria-label="查看第 ${index + 1} 次试穿${item.status === "succeeded" ? "结果" : "状态"}"><img src="${item.result_thumbnail_url || item.result_url || item.person_url}" loading="lazy" decoding="async" alt=""><span>${item.status === "succeeded" ? "查看结果" : taskStatusNames[item.status] || "查看状态"}</span></button>`).join("")}</div>` : "<p>这件单品还没有用于试穿。</p>"}`;
     $("#garmentUsage").querySelectorAll("[data-dialog-tryon]").forEach((button) => button.addEventListener("click", () => { closeDialog($("#garmentDialog")); switchView("tryon"); showTryon(state.tryons.find((item) => item.id === button.dataset.dialogTryon)); }));
     openDialog($("#garmentDialog"));
   } catch (error) { toast(error.message, true); }
@@ -502,6 +639,7 @@ async function reparseSelectedGarment() {
   switchView("wardrobe");
   showGarmentProgress(true, { stage: "queued", progress: 2 });
   try {
+    await checkImportCosts(false);
     const created = await api(`/api/garments/${state.selectedGarmentId}/parse`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: $("#garmentType").value }) });
     await pollJob(created.job_id, "garment_parse", created.garment_id);
   } catch (error) { showGarmentProgress(false); toast(error.message, true); }
@@ -517,9 +655,22 @@ function showTryonProgress(show, job) {
   if (job) { $("#tryonProgressStage").textContent = stageNames[job.stage] || job.stage; $("#tryonProgressBar").style.width = `${job.progress || 2}%`; }
 }
 
-function showTryonError(message) {
+function showTryonError(message, job = {}) {
   setTryonStep("error");
-  $("#tryonErrorMessage").textContent = `${message} 已选择的衣服和形象照会保留，可调整后重试。`;
+  $("#tryonErrorTitle").textContent = job.status === "unknown" ? "这次提交还需要核实" : job.status === "waiting_result" || job.status === "running" ? "任务还未结束" : "这次没有完成";
+  $("#tryonErrorMessage").textContent = job.status === "unknown" ? `${message} 可能已经产生费用，请勿重复生成。` : message;
+  const resume = $("#resumeTryonJob");
+  resume.hidden = !job.jobId || (!job.canResume && !["queued", "running", "waiting_result"].includes(job.status));
+  resume.dataset.jobId = job.jobId || "";
+  resume.textContent = job.canResume || job.status === "waiting_result" ? "继续查询这次任务" : "查看这次任务的进度";
+  $("#retryPendingSubmission").hidden = true;
+}
+
+function showPendingSubmission() {
+  switchView("tryon");
+  showTryonError("暂时没有收到提交结果。点击“查看这次提交”会复用同一份请求，不会另建一次试穿。", { status: "unknown" });
+  $("#tryonErrorTitle").textContent = "提交结果暂未收到";
+  $("#retryPendingSubmission").hidden = false;
 }
 
 function showGarmentProgress(show, job) {
@@ -535,15 +686,27 @@ function renderFailedGarmentRetry() {
   panel.querySelectorAll("[data-retry-garment]").forEach((button) => button.addEventListener("click", () => retryFailedGarment(button.dataset.retryGarment)));
 }
 
-async function pollJob(jobId, context, entityId) {
+function pollJob(jobId, context, entityId) {
+  if (activePolls.has(jobId)) return activePolls.get(jobId);
+  const promise = pollJobLoop(jobId, context, entityId).finally(() => activePolls.delete(jobId));
+  activePolls.set(jobId, promise);
+  return promise;
+}
+
+async function pollJobLoop(jobId, context, entityId) {
+  const ownerKey = state.ownerKey;
+  trackJob(jobId, context, entityId);
   const deadline = Date.now() + 210000;
   while (Date.now() < deadline) {
     const job = await api(`/api/jobs/${jobId}`);
+    if (state.ownerKey !== ownerKey) return;
+    trackJob(jobId, context, entityId, job);
     if (context === "tryon") showTryonProgress(true, job);
     else if (context === "draft") showDraftOutfitProgress(true, job);
     else if (context.startsWith("garment")) showGarmentProgress(true, job);
     else showLookProgress(true, job);
     if (job.status === "succeeded") {
+      forgetJob(jobId);
       if (context === "draft") {
         state.draftLook = await api(`/api/tryon-drafts/${entityId}`);
         state.outfitSource = "upload";
@@ -560,25 +723,38 @@ async function pollJob(jobId, context, entityId) {
       toast({ tryon: "试穿图已保存到本机", draft: "搭配图已识别，尚未写入衣橱", garment: "识别出的衣服已加入我的衣橱", garment_parse: "单品轮廓已重新识别" }[context] || "穿搭与识别单品已保存");
       return;
     }
+    if (["unknown", "waiting_result"].includes(job.status)) {
+      if (context === "tryon") showTryonError(job.error?.message || (job.status === "unknown" ? "服务端尚未确认这次提交结果。" : "查询暂时停止，可以继续查询原任务。"), { status: job.status, jobId, canResume: job.can_resume });
+      else {
+        if (context === "draft") showDraftOutfitProgress(false);
+        else if (context.startsWith("garment")) showGarmentProgress(false);
+        else showLookProgress(false);
+        toast(job.status === "unknown" ? "这次任务待核实，请勿重新提交。" : "可以在页面上方继续查询原任务。", true);
+      }
+      if (context !== "draft") await loadData();
+      return;
+    }
     if (job.status === "failed") {
       if (context === "tryon") showTryonProgress(false);
       else if (context === "draft") showDraftOutfitProgress(false);
       else if (context.startsWith("garment")) showGarmentProgress(false);
       else showLookProgress(false);
       if (context !== "draft") await loadData();
-      if (context === "garment") {
+      if (context === "garment" && !job.can_resume) {
         state.failedGarmentJob = { jobId, message: job.error?.message || "单品识别失败" };
         renderFailedGarmentRetry();
-      } else if (!context.startsWith("garment") && context !== "tryon" && context !== "draft") {
+      } else if (!job.can_resume && !context.startsWith("garment") && context !== "tryon" && context !== "draft") {
         state.selectedLookId = entityId;
         state.failedLook = { lookId: entityId, message: job.error?.message || "任务失败" };
         renderLooks();
-      } else if (context === "tryon") showTryonError(job.error?.message || "试穿生成失败");
+      } else if (context === "tryon") showTryonError(job.error?.message || "试穿没有完成。", { status: job.status, jobId, canResume: job.can_resume });
       throw new Error(job.error?.message || "任务失败");
     }
     await new Promise((resolve) => setTimeout(resolve, 2500));
   }
-  throw new Error("页面等待超时，后台任务可能仍在运行，可稍后刷新查看");
+  const message = "页面等待已结束，后台任务可能仍在运行。可以继续查看这次任务。";
+  if (context === "tryon") showTryonError(message, { status: "running", jobId });
+  else toast(message);
 }
 
 async function uploadLook(file) {
@@ -589,6 +765,7 @@ async function uploadLook(file) {
   switchView("looks");
   showLookProgress(true, { stage: "queued", progress: 2 });
   try {
+    await checkImportCosts();
     const created = await api("/api/looks", { method: "POST", body: form });
     state.selectedLookId = created.look_id;
     await loadData();
@@ -605,6 +782,7 @@ async function uploadGarment(file) {
   renderFailedGarmentRetry();
   showGarmentProgress(true, { stage: "queued", progress: 2 });
   try {
+    await checkImportCosts();
     const created = await api("/api/garments", { method: "POST", body: form });
     await pollJob(created.job_id, "garment", created.garment_id);
   } catch (error) { showGarmentProgress(false); toast(error.message, true); }
@@ -615,6 +793,7 @@ async function retryFailedGarment(type) {
   if (!state.failedGarmentJob) return;
   showGarmentProgress(true, { stage: "queued", progress: 2 });
   try {
+    await checkImportCosts(false);
     const created = await api(`/api/jobs/${state.failedGarmentJob.jobId}/retry-garment`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type }) });
     await pollJob(created.job_id, "garment", created.garment_id);
   } catch (error) { showGarmentProgress(false); toast(error.message, true); }
@@ -624,6 +803,7 @@ async function manualParse(types) {
   if (!state.selectedLookId) return;
   showLookProgress(true, { stage: "queued", progress: 2 });
   try {
+    await checkImportCosts(false);
     const created = await api(`/api/looks/${state.selectedLookId}/parse`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ types }) });
     await pollJob(created.job_id, "parse", state.selectedLookId);
   } catch (error) { showLookProgress(false); toast(error.message, true); }
@@ -797,6 +977,7 @@ async function uploadDraftOutfit(file) {
   form.append("image", file);
   showDraftOutfitProgress(true, { stage: "queued", progress: 2 });
   try {
+    await checkImportCosts();
     const created = await api("/api/tryon-drafts", { method: "POST", body: form });
     await pollJob(created.job_id, "draft", created.draft_id);
   } catch (error) {
@@ -884,39 +1065,126 @@ function updateGenerateButton() {
   $("#generateRequirement").textContent = hasGarment && hasPerson ? "衣服和形象照已就绪。" : !hasGarment && !hasPerson ? "还需选择衣服和全身正面形象照。" : !hasGarment ? "还需选择至少一件衣服。" : "还需选择一张全身正面形象照。";
 }
 
-function openGenerationConfirm(quality = "basic", action = "new") {
+function authorizationExpired(pending) {
+  if (!pending?.expires_at) return false;
+  const raw = pending.expires_at;
+  const expires = typeof raw === "number" ? raw * (raw < 1e12 ? 1000 : 1) : Date.parse(raw);
+  return Number.isFinite(expires) && expires <= Date.now();
+}
+
+function generationInput(quality, action) {
+  if (action === "plus") return { source_tryon_id: state.currentTryonId, quality: "plus", action: "plus" };
+  return {
+    quality,
+    person_image_id: state.selectedPersonImageId || "",
+    source_tryon_id: state.personSourceTryonId || "",
+    draft_look_id: state.outfitSource === "upload" ? state.draftLook?.id || "" : "",
+    ...Object.fromEntries(Object.entries(state.selectedGarments).map(([type, id]) => [`${type}_id`, id || ""])),
+  };
+}
+
+async function openGenerationConfirm(quality = "basic", action = "new") {
+  if (state.pendingGeneration?.submissionAttempted) { showPendingSubmission(); return; }
   if (action === "new" && (!Object.values(state.selectedGarments).some(Boolean) || !(state.selectedPersonImageId || state.personSourceTryonId))) return;
   const selected = selectedOutfitItems().map(({ item }) => item);
   const current = state.tryons.find((item) => item.id === state.currentTryonId);
+  if (action === "plus" && !current) return;
   const cards = action === "plus" ? [current?.dress_url ? { crop_url: current.dress_url, label_zh: current.dress_label } : null, current?.upper_url ? { crop_url: current.upper_url, label_zh: current.upper_label } : null, current?.lower_url ? { crop_url: current.lower_url, label_zh: current.lower_label } : null].filter(Boolean) : selected;
-  state.pendingGeneration = { quality, action };
-  $("#generationSummary").innerHTML = `<div class="confirm-person"><img src="${action === "plus" ? current?.person_url : selectedPersonUrl()}" alt=""><span>全身正面形象照</span></div><div class="confirm-plus">搭配</div><div class="confirm-garments">${cards.map((item) => `<div><img src="${item.crop_url}" alt=""><span>${escapeHtml(item.label_zh || "单品")}</span></div>`).join("")}</div>`;
-  $("#generationPrice").textContent = quality === "plus" ? "高质量试穿 · 约 ¥0.50" : "基础试穿 · 约 ¥0.20";
+  const input = generationInput(quality, action);
+  const signature = JSON.stringify(input);
+  const existing = state.pendingGeneration;
+  const pending = existing?.signature === signature && existing.authorization_id && !authorizationExpired(existing) ? existing : { quality, action, signature };
+  state.pendingGeneration = pending;
+  $("#generationSummary").innerHTML = `<div class="confirm-person"><img src="${escapeHtml(action === "plus" ? current.person_url : selectedPersonUrl())}" alt=""><span>全身正面形象照</span></div><div class="confirm-plus">搭配</div><div class="confirm-garments">${cards.map((item) => `<div><img src="${escapeHtml(item.crop_url)}" alt=""><span>${escapeHtml(item.label_zh || "单品")}</span></div>`).join("")}</div>`;
+  $("#generationPrice").textContent = "正在查询费用…";
+  $("#generationError").hidden = true;
+  $("#generationBudget").textContent = "本次只生成 1 张，费用由服务端核对。";
+  $("#confirmGeneration").disabled = true;
   $("#confirmGeneration").textContent = quality === "plus" ? "确认生成高质量试穿" : "确认生成基础试穿";
-  openDialog($("#generationDialog"));
+  if (!$("#generationDialog").open) openDialog($("#generationDialog"));
+  try {
+    const usage = await loadUsage();
+    if (usage.operations?.[quality === "plus" ? "tryon_plus" : "tryon_basic"] == null) throw new Error("这项试穿价格尚未配置，请先由服务端设置费用上限。");
+    if (!pending.authorization_id) {
+      const form = new FormData();
+      Object.entries(input).forEach(([name, value]) => { if (value) form.append(name, value); });
+      const quote = await api("/api/tryon-authorizations", { method: "POST", body: form });
+      if (!quote.authorization_id || !quote.request_id || typeof quote.estimated_cents !== "number" || typeof quote.max_cents !== "number") throw new Error("费用确认信息不完整，请稍后重新查看。");
+      Object.assign(pending, quote);
+    }
+    if (state.pendingGeneration !== pending) return;
+    saveWork();
+    $("#generationPrice").textContent = `${qualityNames[quality]} · 约 ${money(pending.estimated_cents)}`;
+    $("#generationBudget").textContent = `本次上限 ${money(pending.max_cents)}；个人可用 ${money(usage.remaining_cents)}，服务总可用 ${money(usage.global_remaining_cents)}。`;
+    $("#confirmGeneration").disabled = false;
+  } catch (error) {
+    if (state.pendingGeneration !== pending) return;
+    $("#generationPrice").textContent = "暂时无法确认费用";
+    $("#generationError").textContent = error.message;
+    $("#generationError").hidden = false;
+  }
 }
 
 async function confirmGeneration() {
   const pending = state.pendingGeneration;
-  if (!pending) return;
+  if (!pending?.authorization_id || !pending.request_id || $("#confirmGeneration").disabled) return;
+  if (!pending.submissionAttempted && authorizationExpired(pending)) {
+    $("#generationError").textContent = "本次确认已过期，请返回后重新查看费用。";
+    $("#generationError").hidden = false;
+    $("#confirmGeneration").disabled = true;
+    return;
+  }
+  $("#confirmGeneration").disabled = true;
   closeDialog($("#generationDialog"));
-  pending.action === "plus" ? await submitPlusRetry() : await submitTryon();
+  await submitAuthorizedTryon();
 }
 
-async function submitTryon() {
-  const form = new FormData();
-  if (state.selectedPersonImageId) form.append("person_image_id", state.selectedPersonImageId);
-  if (state.personSourceTryonId) form.append("source_tryon_id", state.personSourceTryonId);
-  form.append("quality", "basic");
-  if (state.outfitSource === "upload" && state.draftLook) form.append("draft_look_id", state.draftLook.id);
-  Object.entries(state.selectedGarments).forEach(([type, id]) => { if (id) form.append(`${type}_id`, id); });
+async function retryPendingSubmission() {
+  if (!state.pendingGeneration?.submissionAttempted) return;
+  await submitAuthorizedTryon();
+}
+
+let submissionInFlight = false;
+async function submitAuthorizedTryon() {
+  const pending = state.pendingGeneration;
+  if (!pending?.authorization_id || !pending.request_id || submissionInFlight) return;
+  submissionInFlight = true;
+  const ownerKey = state.ownerKey;
+  pending.submissionAttempted = true;
+  saveWork();
+  switchView("tryon");
   showTryonProgress(true, { stage: "queued", progress: 2 });
+  let created;
   try {
-    const created = await api("/api/tryons", { method: "POST", body: form });
+    // This host-only confirmation happens only after an explicit user click.
+    // Repeating it after a lost response preserves the same authorization.
+    await api(`/api/tryon-authorizations/${encodeURIComponent(pending.authorization_id)}/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ request_id: pending.request_id }) });
+    created = await api("/api/tryons", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ authorization_id: pending.authorization_id, request_id: pending.request_id }) });
+    if (!created.tryon_id || !created.job_id) throw new Error("暂时没有收到完整任务信息。");
+  } catch (error) {
+    if (state.ownerKey !== ownerKey) return;
+    if (error.status >= 400 && error.status < 500 && error.code !== "auth_required") {
+      state.pendingGeneration = null;
+      saveWork();
+      showTryonError(`${error.message} 衣服和形象照会保留；调整后可重新查看费用。`);
+    } else { saveWork(); showPendingSubmission(); }
+    toast(error.message, true);
+    return;
+  } finally { submissionInFlight = false; }
+  if (state.ownerKey !== ownerKey) return;
+  state.pendingGeneration = null;
+  state.currentTryonId = created.tryon_id;
+  trackJob(created.job_id, "tryon", created.tryon_id);
+  try {
     await loadAuthStatus();
-    state.currentTryonId = created.tryon_id;
-    await pollJob(created.job_id, "tryon", created.tryon_id);
-  } catch (error) { showTryonError(error.message); toast(error.message, true); }
+    await loadUsage();
+  } catch (_) { /* The generated task remains available if a status refresh fails. */ }
+  try { await pollJob(created.job_id, "tryon", created.tryon_id); }
+  catch (error) {
+    const tracked = state.trackedJobs[created.job_id];
+    showTryonError(error.message, { status: tracked?.status || "running", jobId: created.job_id, canResume: tracked?.canResume });
+    toast(error.message, true);
+  }
 }
 
 async function revealTryonResult(item) {
@@ -931,7 +1199,15 @@ async function revealTryonResult(item) {
 }
 
 function showTryon(item) {
-  if (!item || item.status !== "succeeded" || !item.result_url) return;
+  if (!item) return;
+  if (item.status !== "succeeded" || !item.result_url) {
+    state.currentTryonId = item.id;
+    if (item.job_id) {
+      trackJob(item.job_id, "tryon", item.id, item);
+      void recoverTrackedJob(item.job_id);
+    } else showTryonError(item.error_message || "这条试穿还没有可查看的结果。");
+    return;
+  }
   state.currentTryonId = item.id;
   $("#resultPersonImage").src = item.person_url;
   $("#resultImage").src = item.result_url;
@@ -957,18 +1233,8 @@ function setResultMode(mode) {
 function renderTryonHistory() {
   const container = $("#tryonHistory");
   if (!state.tryons.length) { container.innerHTML = '<p class="picker-empty">还没有试穿结果。</p>'; return; }
-  container.innerHTML = state.tryons.map((item, index) => item.status === "succeeded" ? `<button class="tryon-thumb" data-tryon-id="${item.id}" aria-label="查看第 ${index + 1} 次试穿，${qualityNames[item.quality] || item.quality}"><img src="${item.result_thumbnail_url || item.result_url}" loading="lazy" decoding="async" alt=""><span>${qualityNames[item.quality] || item.quality}</span></button>` : `<div class="tryon-thumb failed">${item.status === "failed" ? "生成失败" : "生成中"}</div>`).join("");
+  container.innerHTML = state.tryons.map((item, index) => `<button class="tryon-thumb${item.status !== "succeeded" ? " pending" : ""}" data-tryon-id="${item.id}" aria-label="查看第 ${index + 1} 次试穿${item.status === "succeeded" ? "结果" : "状态"}"><img src="${item.result_thumbnail_url || item.result_url || item.person_url}" loading="lazy" decoding="async" alt=""><span>${escapeHtml(item.status === "succeeded" ? qualityNames[item.quality] || item.quality : taskStatusNames[item.status] || "处理中")}</span>${item.status !== "succeeded" ? '<strong class="tryon-status-link">查看状态</strong>' : ""}</button>`).join("");
   container.querySelectorAll("[data-tryon-id]").forEach((button) => button.addEventListener("click", () => showTryon(state.tryons.find((item) => item.id === button.dataset.tryonId))));
-}
-
-async function submitPlusRetry() {
-  if (!state.currentTryonId) return;
-  showTryonProgress(true, { stage: "queued", progress: 2 });
-  try {
-    const created = await api(`/api/tryons/${state.currentTryonId}/retry`, { method: "POST" });
-    state.currentTryonId = created.tryon_id;
-    await pollJob(created.job_id, "tryon", created.tryon_id);
-  } catch (error) { showTryonError(error.message); toast(error.message, true); }
 }
 
 async function saveCurrentTryonAsLook() {
@@ -1080,6 +1346,8 @@ $("#reusePerson").addEventListener("click", () => reuseCurrentTryon(true));
 $("#viewTryonGarments").addEventListener("click", viewCurrentTryonGarments);
 $("#resultOriginalToggle").addEventListener("click", () => setResultMode(state.resultMode === "compare" ? "result" : "compare"));
 $("#dismissTryonError").addEventListener("click", () => setTryonStep("person"));
+$("#resumeTryonJob").addEventListener("click", () => recoverTrackedJob($("#resumeTryonJob").dataset.jobId));
+$("#retryPendingSubmission").addEventListener("click", retryPendingSubmission);
 $("#toastClose").addEventListener("click", () => { clearTimeout(toastTimer); $("#toast").className = "toast"; });
 $("#favoriteLook").addEventListener("click", toggleLookFavorite);
 $("#deleteLook").addEventListener("click", deleteSelectedLook);
@@ -1094,6 +1362,10 @@ $("#settingsForm").addEventListener("submit", saveSettings);
 $("#accessForm").addEventListener("submit", login);
 $("#accountButton").addEventListener("click", logout);
 initTilt();
-Promise.all([loadHealth(), loadAuthStatus()]).then(([, auth]) => {
-  if (auth.authenticated) return loadData();
+Promise.all([loadHealth(), loadAuthStatus()]).then(async ([, auth]) => {
+  if (auth.authenticated) {
+    await loadData();
+    await loadUsage();
+    await recoverSavedWork();
+  }
 }).catch((error) => toast(error.message, true));

@@ -306,6 +306,27 @@ button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visibl
 .tryon-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .tryon-thumb span { position: absolute; bottom: 7px; left: 7px; padding: 3px 6px; border-radius: 7px; color: white; background: rgba(38,28,42,.7); font-size: 10px; }
 .tryon-thumb.failed { display: grid; place-items: center; color: #9b5950; font-size: 11px; }
+.tryon-thumb.pending img { opacity: .45; }
+.tryon-status-link { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink); font-size: 12px; }
+.usage-notice, .task-recovery { width: min(1440px, calc(100% - 48px)); margin: 16px auto; }
+.usage-notice { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.task-recovery { padding: 18px 22px; }
+.task-recovery h2 { margin: 0 0 8px; font: 20px var(--display-font, Georgia); }
+.recovery-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+.recovery-row + .recovery-row { border-top: 1px solid var(--line); }
+.recovery-row p { flex: 1; margin: 0; line-height: 1.6; }
+.recovery-row strong, .recovery-row span { display: block; }
+.recovery-row strong { font-size: 13px; }
+.recovery-row span { color: var(--muted); font-size: 12px; }
+.recovery-row button { flex-shrink: 0; }
+#tryonError { gap: 10px; }
+#tryonError p { max-width: 480px; line-height: 1.7; }
+#generationBudget { line-height: 1.7; }
+@media (max-width: 600px) {
+  .usage-notice, .task-recovery { width: calc(100% - 28px); }
+  .recovery-row { flex-wrap: wrap; }
+  .recovery-row p { flex-basis: 100%; }
+}
 .toast { position: fixed; z-index: 50; left: 50%; bottom: 28px; max-width: min(520px, calc(100vw - 30px)); display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 18px; border-radius: 12px; color: white; background: #332731; box-shadow: 0 12px 35px rgba(0,0,0,.2); opacity: 0; pointer-events: none; transform: translate(-50%, 15px); transition: .25s; }
 .toast.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
 .toast.error { background: #9b4036; }

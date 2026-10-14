@@ -20,6 +20,7 @@ def main() -> int:
         os.environ.update(
             WARDROBE_DATA_DIR=str(Path(temporary) / "data"),
             FITMIX_CONFIG_PATH=str(Path(temporary) / "no-credentials.env"),
+            FITMIX_RECOVERY_DISABLED="1",
             PYTHONDONTWRITEBYTECODE="1",
         )
         import requests
@@ -38,7 +39,8 @@ def main() -> int:
                 [node, "--check", "fitmix/static/app.js"],
                 [node, "--check", "fitmix/static/pagination.js"],
                 [node, "fitmix/static/pagination.js"],
-                ["bash", "-n", "scripts/macos/setup.command", "scripts/macos/start.command", "scripts/macos/stop.command", "scripts/macos/build.command"],
+                [node, "tests/test_frontend_reliability.js"],
+                *[ ["bash", "-n", f"scripts/macos/{name}.command"] for name in ("setup","start","stop","build") ],
                 [sys.executable, "-B", "-m", "gunicorn", "--check-config", "fitmix.app:app"],
             ):
                 subprocess.run(command, check=True)

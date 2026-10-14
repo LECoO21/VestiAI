@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -13,7 +14,9 @@ import fitmix.app as wardrobe
 
 
 class FakeBailian:
-    def analyze_look(self, _path, _source_kind="photo"):
+    def analyze_look(self, _path, _source_kind="photo", *, on_submitting=None):
+        if on_submitting:
+            on_submitting()
         if _source_kind == "wardrobe":
             return {
                 "title_en": "Wardrobe Import",
@@ -33,7 +36,9 @@ class FakeBailian:
             "garments": [{"type": "upper", "label_zh": "测试上衣", "description_zh": "清晰可见"}],
         }
 
-    def parse_garments(self, _path, types):
+    def parse_garments(self, _path, types, *, on_submitting=None):
+        if on_submitting:
+            on_submitting()
         return [{"type": item, "crop_url": "https://example.test/crop.png", "parsing_url": "https://example.test/mask.png", "bbox": [1, 2, 3, 4]} for item in types]
 
     def download(self, _url, destination):
@@ -68,6 +73,9 @@ class AppTests(unittest.TestCase):
         wardrobe.validate_deployment_config("demo", Path("/tmp/fitmix"), "visitor", "admin", "x" * 32)
 
     def setUp(self):
+        self.environment = patch.dict(os.environ, {"FITMIX_RECOVERY_DISABLED":"1", "FITMIX_RECOGNITION_CENTS":"5", "FITMIX_SEGMENTATION_CENTS":"10"})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
         self.temp = tempfile.TemporaryDirectory()
         wardrobe.DATA_DIR = Path(self.temp.name) / "data"
         wardrobe.DB_PATH = wardrobe.DATA_DIR / "wardrobe.db"
@@ -79,6 +87,16 @@ class AppTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def post_tryon(self, client=None, **kwargs):
+        client = client or self.client
+        authorization = client.post("/api/tryon-authorizations", **kwargs)
+        if authorization.status_code != 201:
+            return authorization
+        confirmation = client.post(f"/api/tryon-authorizations/{authorization.json['authorization_id']}/confirm",json={"request_id":authorization.json["request_id"]})
+        if confirmation.status_code != 200:
+            return confirmation
+        return client.post("/api/tryons",json={key:authorization.json[key] for key in ("authorization_id","request_id")})
 
     def create_processed_tryon_draft(self):
         with patch.object(wardrobe, "enqueue"):
@@ -127,12 +145,15 @@ class AppTests(unittest.TestCase):
                 headers={"Origin": "https://example.test"},
             )
             self.assertEqual(blocked.status_code, 403)
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text("FITMIX_USER_BUDGET_CENTS=300\n",encoding="utf-8")
             saved = self.client.post(
                 "/api/settings",
                 json={"workspace_id": "workspace-one", "api_key": "secret-one"},
             )
             self.assertEqual(saved.status_code, 200)
             self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+            self.assertIn("FITMIX_USER_BUDGET_CENTS=300",config_path.read_text(encoding="utf-8"))
             settings = self.client.get("/api/settings").json
             self.assertEqual(settings, {"workspace_id": "workspace-one", "api_key_configured": True})
             self.assertNotIn("secret-one", str(settings))
@@ -183,8 +204,7 @@ class AppTests(unittest.TestCase):
         draft_id = self.create_processed_tryon_draft()
         garment_id = self.client.get(f"/api/tryon-drafts/{draft_id}").json["garments"][0]["id"]
         with patch.object(wardrobe, "enqueue"):
-            created = self.client.post(
-                "/api/tryons",
+            created = self.post_tryon(
                 data={
                     "upper_id": garment_id,
                     "draft_look_id": draft_id,
@@ -255,7 +275,8 @@ class AppTests(unittest.TestCase):
                 garment_id = uuid.uuid4().hex
                 source = wardrobe.DATA_DIR / "garment-sources" / f"skirt-{index}.jpg"
                 source.write_bytes(sample_jpeg())
-                wardrobe.process_direct_garment("job", garment_id, f"garment-sources/skirt-{index}.jpg")
+                job_id = wardrobe.create_job("garment",garment_id,f"garment-sources/skirt-{index}.jpg")
+                wardrobe.process_direct_garment(job_id, garment_id, f"garment-sources/skirt-{index}.jpg")
         garments = self.client.get("/api/garments").json["items"]
         names = [item["label_zh"] for item in garments]
         self.assertEqual(len(names), len(set(names)))
@@ -320,8 +341,7 @@ class AppTests(unittest.TestCase):
                 (garment_id,),
             )
         with patch.object(wardrobe, "enqueue"):
-            response = self.client.post(
-                "/api/tryons",
+            response = self.post_tryon(
                 data={"upper_id": garment_id, "person": (io.BytesIO(sample_jpeg()), "person.jpg")},
                 content_type="multipart/form-data",
             )
@@ -358,8 +378,7 @@ class AppTests(unittest.TestCase):
                 (garment_id,),
             )
         with patch.object(wardrobe, "enqueue"):
-            response = self.client.post(
-                "/api/tryons",
+            response = self.post_tryon(
                 data={"upper_id": garment_id, "person_image_id": saved[0]["id"]},
             )
         self.assertEqual(response.status_code, 202)
@@ -468,11 +487,11 @@ class AppTests(unittest.TestCase):
         with patch.object(wardrobe, "enqueue") as queued:
             tryons = wardrobe.tryon_service()
             with self.assertRaises(ServiceError):
-                tryons.create(other, {"dress": "private"}, person_image_id="private-person")
+                tryons.authorize(other, {"dress": "private"}, person_image_id="private-person")
             with self.assertRaises(ServiceError):
-                tryons.create(owner, {"dress": "private"}, person_image_id="private-person", quality="plus")
+                tryons.authorize(owner, {"dress": "private"}, person_image_id="private-person", quality="plus")
             with self.assertRaises(ServiceError):
-                tryons.create(owner, {"dress": "private"}, person_image_id="someone-else")
+                tryons.authorize(owner, {"dress": "private"}, person_image_id="someone-else")
             queued.assert_not_called()
             self.assertEqual(list((wardrobe.DATA_DIR / "tryons").iterdir()), [])
 
@@ -597,7 +616,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(response.json["seasons"], ["spring", "autumn"])
 
     def test_tryon_rejects_dress_mixed_with_separates(self):
-        response = self.client.post("/api/tryons", data={"dress_id": "d", "upper_id": "u"})
+        response = self.client.post("/api/tryon-authorizations", data={"dress_id": "d", "upper_id": "u", "person_image_id":"person"})
         self.assertEqual(response.status_code, 400)
         self.assertIn("不能", response.json["error"]["message"])
 
@@ -668,14 +687,12 @@ class AppTests(unittest.TestCase):
             created_ids = []
             with patch.object(wardrobe, "enqueue"):
                 for _ in range(3):
-                    response = client.post(
-                        "/api/tryons",
+                    response = self.post_tryon(client=client,
                         data={"upper_id": "visitor-top", "person_image_id": "visitor-person"},
                     )
                     self.assertEqual(response.status_code, 202)
                     created_ids.append(response.json["tryon_id"])
-                blocked = client.post(
-                    "/api/tryons",
+                blocked = self.post_tryon(client=client,
                     data={"upper_id": "visitor-top", "person_image_id": "visitor-person"},
                 )
             self.assertEqual(blocked.status_code, 429)

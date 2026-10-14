@@ -166,9 +166,17 @@ class WardrobeService:
             row = connection.execute("SELECT * FROM jobs WHERE id=? AND owner_id=?", (job_id, user.owner_id)).fetchone()
             if not row:
                 raise ServiceError("任务不存在", 404, "not_found")
+            steps = connection.execute("SELECT status FROM model_usage WHERE job_id=?", (job_id,)).fetchall()
+            can_resume = row["status"] in {"queued","waiting_result"}
+            if row["remote_task_id"] and row["status"] != "failed":
+                can_resume = True
+            elif row["status"] == "failed":
+                can_resume = bool(steps) and all(step["status"] == "succeeded" for step in steps)
         return {
             "id": row["id"], "kind": row["kind"], "entity_id": row["entity_id"],
             "status": row["status"], "stage": row["stage"], "progress": row["progress"],
+            "remote_task_id": row["remote_task_id"],
+            "can_resume": can_resume,
             "error": {"code": row["error_code"], "message": row["error_message"]} if row["error_message"] else None,
         }
 

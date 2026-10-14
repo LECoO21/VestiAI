@@ -53,6 +53,16 @@ DASHSCOPE_WORKSPACE_ID=your_workspace_id
 
 Never commit `.env`, an API key, or screenshots containing credentials. The macOS app stores credentials only on the current Mac; the source edition has no browser credential form.
 
+## Model budgets and recovery
+
+Recognition, segmentation and try-on share atomic, cumulative per-job, per-user and application budgets. Unknown submissions retain their estimated cost; the platform bill remains the source of actual charges. Configure positive per-call RMB-cent estimates for `FITMIX_RECOGNITION_CENTS` and `FITMIX_SEGMENTATION_CENTS` in `.env` before importing images; missing estimates block calls. See [.env.example](.env.example). Desktop credentials updates preserve budget configuration. Restart after configuration changes.
+
+Basic/Plus estimates default to 20/50 cents, with 100 cents per job, 1000 cents per ordinary user and the existing 6000-cent application limit. Visitors also retain their existing count and 200-cent cap. Budgets cover all roles and do not reset on refresh or deletion.
+
+A quote alone cannot authorize generation: explicit user confirmation is required. Repeated confirmed requests reuse one task. Waiting tasks resume the original remote ID; uncertain submissions are never automatically recreated. Successful recognition and segmentation steps are cached for download recovery. If no remote ID was received, verify the request in Bailian before taking further action.
+
+Schema version 2 upgrades with an automatic backup and retains unfinished tasks. Existing installed apps need a rebuild to include these changes. No platform billing integration or real-model validation is claimed.
+
 ## macOS app (recommended)
 
 The locally built installer supports **Apple Silicon Macs (M1 or newer) running macOS 11 or later** and does not require Python after installation:
