@@ -69,8 +69,8 @@ Wardrobe data and credentials remain in `~/Library/Application Support/FitMix` s
 Clone the repository first:
 
 ```bash
-git clone https://github.com/betterjally-oss/FitMix.git
-cd FitMix
+git clone https://github.com/betterjally-oss/FitMix.git VestiAI
+cd VestiAI
 ```
 
 ### macOS (source edition)

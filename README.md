@@ -4,7 +4,7 @@
 
 VestiAI 是一个可本地运行、自带网页界面的数字衣橱。它能整理衣物、保存搭配、管理形象照，并生成 AI 虚拟试穿效果。
 
-项目由 FitMix 更名为 VestiAI。源码目录和启动命令继续兼容原版，已有衣橱与凭证无需搬迁。
+项目由 FitMix 更名为 VestiAI。内部代码结构和启动命令继续兼容原版，已有衣橱与凭证无需搬迁。
 
 > 本项目采用 BYOK（Bring Your Own Key）：仓库不包含任何默认 API Key，使用者自行配置 AI 服务凭证并承担相应费用。
 
@@ -69,8 +69,8 @@ DASHSCOPE_WORKSPACE_ID=你的_业务空间_ID
 先克隆仓库：
 
 ```bash
-git clone https://github.com/betterjally-oss/FitMix.git
-cd FitMix
+git clone https://github.com/betterjally-oss/FitMix.git VestiAI
+cd VestiAI
 ```
 
 ### macOS（源码版）
