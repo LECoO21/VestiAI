@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import requests
 
-from fitmix.bailian import BailianClient, BailianError, BailianSubmissionUnknown, validate_analysis, validate_garment
+from vestiai.bailian import BailianClient, BailianError, BailianSubmissionUnknown, validate_analysis, validate_garment
 
 
 class FakeResponse:
@@ -87,7 +87,7 @@ class BailianTests(unittest.TestCase):
         parsed = client.parse_garments(Path("input.jpg"), ["upper", "lower"])
         self.assertEqual([item["type"] for item in parsed], ["upper", "lower"])
         self.assertEqual(parsed[1]["bbox"], [5, 6, 7, 8])
-        with patch("fitmix.bailian.time.sleep", return_value=None):
+        with patch("vestiai.bailian.time.sleep", return_value=None):
             self.assertEqual(client.wait_tryon("task-1"), "https://example.test/result.png")
 
     def test_paid_tryon_network_failure_is_not_resubmitted(self):
@@ -160,7 +160,7 @@ class BailianTests(unittest.TestCase):
             FakeResponse({"output": {"task_status": "SUCCEEDED", "image_url": "https://example.test/result.png"}, "request_id": "query-123"}),
         ])
         client = BailianClient("key", "workspace", session)
-        with patch("fitmix.bailian.time.sleep", return_value=None):
+        with patch("vestiai.bailian.time.sleep", return_value=None):
             task = client.query_tryon("original-task")
         self.assertEqual(task["status"], "SUCCEEDED")
         self.assertEqual(task["task_id"], "original-task")
@@ -171,7 +171,7 @@ class BailianTests(unittest.TestCase):
     def test_query_network_failure_has_finite_retries_and_does_not_imply_failure(self):
         session = FakeSession([requests.ConnectionError("offline") for _ in range(3)])
         client = BailianClient("key", "workspace", session)
-        with patch("fitmix.bailian.time.sleep", return_value=None), self.assertRaises(BailianError) as caught:
+        with patch("vestiai.bailian.time.sleep", return_value=None), self.assertRaises(BailianError) as caught:
             client.query_tryon("original-task")
         self.assertEqual(caught.exception.code, "network_error")
         self.assertEqual(len(session.calls), 3)
@@ -189,7 +189,7 @@ class BailianTests(unittest.TestCase):
     def test_wait_timeout_keeps_original_task_recoverable(self):
         session = FakeSession([FakeResponse({"output": {"task_status": "RUNNING"}})])
         client = BailianClient("key", "workspace", session)
-        with patch("fitmix.bailian.time.monotonic", side_effect=[0, 0, 31]), patch("fitmix.bailian.time.sleep", return_value=None):
+        with patch("vestiai.bailian.time.monotonic", side_effect=[0, 0, 31]), patch("vestiai.bailian.time.sleep", return_value=None):
             with self.assertRaises(BailianError) as caught:
                 client.wait_tryon("original-task", timeout_seconds=30)
         self.assertEqual(caught.exception.code, "tryon_timeout")
@@ -282,7 +282,7 @@ class BailianTests(unittest.TestCase):
             FakeResponse({"output": {"task_status": "UNKNOWN"}, "usage": {"image_count": 1}}),
         ])
         client = BailianClient("key", "workspace", session)
-        with patch("fitmix.bailian.time.sleep", return_value=None), self.assertRaises(BailianError) as caught:
+        with patch("vestiai.bailian.time.sleep", return_value=None), self.assertRaises(BailianError) as caught:
             client.wait_tryon("original-task")
         self.assertEqual(caught.exception.code, "task_unknown")
         self.assertEqual(client.last_usage, {"image_count": 1})

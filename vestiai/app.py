@@ -31,12 +31,12 @@ from .services.wardrobe import (
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 ROOT = PACKAGE_ROOT.parent
-DEPLOYMENT_PROFILE = os.environ.get("FITMIX_DEPLOYMENT_PROFILE", "").strip()
-DEFAULT_DATA_DIR = Path("/tmp/fitmix-data") if DEPLOYMENT_PROFILE == "demo" else ROOT / "data"
+DEPLOYMENT_PROFILE = os.environ.get("VESTIAI_DEPLOYMENT_PROFILE", "").strip()
+DEFAULT_DATA_DIR = Path("/tmp/vestiai-data") if DEPLOYMENT_PROFILE == "demo" else ROOT / "data"
 DATA_DIR = Path(os.environ.get("WARDROBE_DATA_DIR", DEFAULT_DATA_DIR))
 DB_PATH = DATA_DIR / "wardrobe.db"
-CONFIG_PATH = Path(os.environ.get("FITMIX_CONFIG_PATH", ROOT / ".env"))
-DESKTOP_MODE = os.environ.get("FITMIX_DESKTOP") == "1"
+CONFIG_PATH = Path(os.environ.get("VESTIAI_CONFIG_PATH", ROOT / ".env"))
+DESKTOP_MODE = os.environ.get("VESTIAI_DESKTOP") == "1"
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MIN_IMAGE_BYTES = 5 * 1024
 MAX_PERSON_IMAGES = 6
@@ -70,7 +70,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[logging.FileHandler(DATA_DIR / "wardrobe.log", encoding="utf-8"), logging.StreamHandler()],
 )
-logger = logging.getLogger("fitmix")
+logger = logging.getLogger("vestiai")
 
 app = Flask(
     __name__,
@@ -97,13 +97,13 @@ def runtime_value(name: str, default: str = "") -> str:
     return os.environ.get(name, env_values().get(name, default)).strip()
 
 
-ACCESS_PASSWORD = runtime_value("FITMIX_ACCESS_PASSWORD")
-ADMIN_PASSWORD = runtime_value("FITMIX_ADMIN_PASSWORD")
-SESSION_SECRET = runtime_value("FITMIX_SECRET_KEY")
+ACCESS_PASSWORD = runtime_value("VESTIAI_ACCESS_PASSWORD")
+ADMIN_PASSWORD = runtime_value("VESTIAI_ADMIN_PASSWORD")
+SESSION_SECRET = runtime_value("VESTIAI_SECRET_KEY")
 AUTH_ENABLED = bool(ACCESS_PASSWORD)
-VISITOR_TRYON_LIMIT = int(runtime_value("FITMIX_VISITOR_TRYON_LIMIT", "3"))
-VISITOR_BUDGET_CENTS = int(runtime_value("FITMIX_VISITOR_BUDGET_CENTS", "200"))
-GLOBAL_BUDGET_CENTS = int(runtime_value("FITMIX_GLOBAL_BUDGET_CENTS", "6000"))
+VISITOR_TRYON_LIMIT = int(runtime_value("VESTIAI_VISITOR_TRYON_LIMIT", "3"))
+VISITOR_BUDGET_CENTS = int(runtime_value("VESTIAI_VISITOR_BUDGET_CENTS", "200"))
+GLOBAL_BUDGET_CENTS = int(runtime_value("VESTIAI_GLOBAL_BUDGET_CENTS", "6000"))
 BASIC_TRYON_CENTS = 20
 
 
@@ -119,9 +119,9 @@ def validate_deployment_config(
     missing = [
         name
         for name, value in (
-            ("FITMIX_ACCESS_PASSWORD", access_password),
-            ("FITMIX_ADMIN_PASSWORD", admin_password),
-            ("FITMIX_SECRET_KEY", session_secret),
+            ("VESTIAI_ACCESS_PASSWORD", access_password),
+            ("VESTIAI_ADMIN_PASSWORD", admin_password),
+            ("VESTIAI_SECRET_KEY", session_secret),
         )
         if not value
     ]
@@ -130,7 +130,7 @@ def validate_deployment_config(
     if access_password == admin_password:
         raise RuntimeError("访客密码和管理员密码不能相同")
     if len(session_secret) < 32:
-        raise RuntimeError("FITMIX_SECRET_KEY 至少需要 32 个字符")
+        raise RuntimeError("VESTIAI_SECRET_KEY 至少需要 32 个字符")
     if not data_dir.resolve().is_relative_to(Path("/tmp").resolve()):
         raise RuntimeError("veFaaS 演示数据目录必须位于 /tmp")
 
@@ -178,14 +178,14 @@ def tryon_service() -> TryonService:
 def usage_policy(owner_id: str = "") -> UsagePolicy:
     estimates = {}
     for operation in ("recognition", "segmentation", "tryon_basic", "tryon_plus", "recommendation", "agent"):
-        value = runtime_value(f"FITMIX_{operation.upper()}_CENTS")
+        value = runtime_value(f"VESTIAI_{operation.upper()}_CENTS")
         if value:
             estimates[operation] = int(value)
     return UsagePolicy(
-        job_limit_cents=int(runtime_value("FITMIX_JOB_BUDGET_CENTS", "100")),
-        user_limit_cents=min(int(runtime_value("FITMIX_USER_BUDGET_CENTS", "1000")), VISITOR_BUDGET_CENTS) if owner_id.startswith("visitor:") else int(runtime_value("FITMIX_USER_BUDGET_CENTS", "1000")),
+        job_limit_cents=int(runtime_value("VESTIAI_JOB_BUDGET_CENTS", "100")),
+        user_limit_cents=min(int(runtime_value("VESTIAI_USER_BUDGET_CENTS", "1000")), VISITOR_BUDGET_CENTS) if owner_id.startswith("visitor:") else int(runtime_value("VESTIAI_USER_BUDGET_CENTS", "1000")),
         global_limit_cents=GLOBAL_BUDGET_CENTS, estimates=estimates,
-        models={key:runtime_value(f"FITMIX_{key.upper()}_MODEL") for key in ("recommendation","agent") if runtime_value(f"FITMIX_{key.upper()}_MODEL")},
+        models={key:runtime_value(f"VESTIAI_{key.upper()}_MODEL") for key in ("recommendation","agent") if runtime_value(f"VESTIAI_{key.upper()}_MODEL")},
     )
 
 
@@ -874,7 +874,7 @@ def recover_jobs() -> None:
 @app.before_request
 def recover_once():
     global _recovery_started
-    if runtime_value("FITMIX_RECOVERY_DISABLED") == "1" or _recovery_started:
+    if runtime_value("VESTIAI_RECOVERY_DISABLED") == "1" or _recovery_started:
         return
     with _recovery_lock:
         if not _recovery_started:
@@ -1365,7 +1365,7 @@ def auth_login():
     if not AUTH_ENABLED:
         return jsonify({"authenticated": True, "role": "admin"})
     if not SESSION_SECRET:
-        return api_error("服务器尚未配置 FITMIX_SECRET_KEY", 503, "auth_not_configured")
+        return api_error("服务器尚未配置 VESTIAI_SECRET_KEY", 503, "auth_not_configured")
     password = str((request.get_json(silent=True) or {}).get("password") or "")
     previous_owner = session.get("owner_id") if session.get("role") == "visitor" else None
     if ADMIN_PASSWORD and hmac.compare_digest(password, ADMIN_PASSWORD):
@@ -1424,7 +1424,7 @@ def health():
         "status": "ok",
         "app_name": "VestiAI",
         "pid": os.getpid(),
-        "server_instance": os.environ.get("FITMIX_SERVER_INSTANCE", ""),
+        "server_instance": os.environ.get("VESTIAI_SERVER_INSTANCE", ""),
         "credentials_configured": client.configured,
         "desktop_mode": DESKTOP_MODE,
         "auth_enabled": AUTH_ENABLED,
@@ -2030,4 +2030,4 @@ init_db()
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=int(os.environ.get("FITMIX_HTTP_PORT", "5050")), debug=False, threaded=True, use_reloader=False)
+    app.run(host="127.0.0.1", port=int(os.environ.get("VESTIAI_HTTP_PORT", "5050")), debug=False, threaded=True, use_reloader=False)

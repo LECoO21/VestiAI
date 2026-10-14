@@ -4,8 +4,6 @@
 
 VestiAI 是一个可本地运行、自带网页界面的数字衣橱。它能整理衣物、保存搭配、管理形象照，并生成 AI 虚拟试穿效果。
 
-VestiAI 基于 [FitMix](https://github.com/betterjally-oss/FitMix) 继续开发，以 MIT 许可开源，保留原作者署名。内部代码结构和启动命令继续兼容原版，已有衣橱与凭证无需搬迁。
-
 当前已完成基础可靠性改造，包括备份、防重复生成、任务恢复、模型预算与费用确认。自动搭配推荐和聊天 Agent 仍在开发规划中，当前版本不提供这些功能。
 
 > 本项目采用 BYOK（Bring Your Own Key）：仓库不包含任何默认 API Key，使用者自行配置 AI 服务凭证并承担相应费用。
@@ -20,18 +18,6 @@ VestiAI 基于 [FitMix](https://github.com/betterjally-oss/FitMix) 继续开发�
 - 保存最多 6 张形象照，查看最近试穿并把结果存入穿搭库
 - 编辑、收藏、合并和删除单品；删除穿搭不会连带删除独立单品与试穿历史
 - 数据与图片默认保存在本机 `data/`，无需外部数据库
-
-## 界面预览
-
-| 我的衣橱 | 搭配选择 |
-| --- | --- |
-| ![我的衣橱](docs/screenshots/wardrobe.png) | ![搭配选择](docs/screenshots/try-on.png) |
-
-| AI 试穿结果 | 穿搭库 |
-| --- | --- |
-| ![AI 试穿结果](docs/screenshots/try-on-result.png) | ![穿搭库](docs/screenshots/looks.png) |
-
-截图来自更名前的演示版本，使用专门生成的素材，不含作者的真实衣物、人物或历史记录；当前界面名称为 VestiAI。
 
 ## 系统要求
 
@@ -59,7 +45,7 @@ DASHSCOPE_WORKSPACE_ID=你的_业务空间_ID
 
 识别、分割和试穿都纳入统一预算。页面会显示估算和可用金额；费用未核实的请求继续占用预算，实际收费以百炼账单为准。默认基础／Plus 单次估算沿用 20／50 分，单任务上限 100 分、普通用户累计上限 1000 分、应用累计上限 6000 分；访客另受原有次数与 200 分上限限制。
 
-**开始导入衣物前，必须在 `.env` 中配置识别和分割的单次费用估算。** 对照所用模型的当前价格和输入大小设置正整数（单位为人民币分），不要填写零；没有配置时会阻止这两个收费步骤。所有可配置字段见 [.env.example](.env.example)。macOS App 的配置文件位于 `~/Library/Application Support/FitMix/.env`，重新保存 API 凭证会保留预算配置。修改配置后重启服务。
+**开始导入衣物前，必须在 `.env` 中配置识别和分割的单次费用估算。** 对照所用模型的当前价格和输入大小设置正整数（单位为人民币分），不要填写零；没有配置时会阻止这两个收费步骤。所有可配置字段见 [.env.example](.env.example)。macOS App 的配置文件位于 `~/Library/Application Support/VestiAI/.env`，重新保存 API 凭证会保留预算配置。修改配置后重启服务。
 
 试穿流程为：选择搭配与形象照 → 查看本次质量、估算和上限 → 明确确认 → 生成。仅查看报价不能消费授权；同一次确认重复提交会返回原任务，不增加生成次数。
 
@@ -79,7 +65,13 @@ DASHSCOPE_WORKSPACE_ID=你的_业务空间_ID
 3. 第一次启动时，按住 Control 点击 VestiAI，选择“打开”并确认；之后可正常双击。
 4. 在自动弹出的“API 设置”中填写自己的百炼 Workspace ID 和 API Key。
 
-衣橱数据和凭证继续保存在 `~/Library/Application Support/FitMix`，以便使用原有衣橱。API Key 不会进入 GitHub，也不会显示在设置页中。原项目的 [GitHub Releases](https://github.com/betterjally-oss/FitMix/releases/latest) 仍是旧版 FitMix 安装包。
+衣橱数据和凭证保存在 `~/Library/Application Support/VestiAI`。API Key 不会进入 GitHub，也不会显示在设置页中。
+
+## 升级现有安装
+
+升级前退出 App 或停止源码服务，并备份现有 `data/`。从先前桌面版升级时，将原应用支持目录中的 `data/`、`.env` 和 `webview/` 迁到 `~/Library/Application Support/VestiAI` 后再启动；如果目标目录已有衣橱，先分别备份并保留两份数据，不直接覆盖。
+
+应用配置变量统一使用 `VESTIAI_*`，升级时请对照 [.env.example](.env.example) 重新配置。百炼凭证变量 `DASHSCOPE_API_KEY` 和 `DASHSCOPE_WORKSPACE_ID` 不变。
 
 ## 源码安装与启动
 
@@ -115,7 +107,7 @@ py -3.11 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 notepad .env
-.venv\Scripts\python -m fitmix.app
+.venv\Scripts\python -m vestiai.app
 ```
 
 在记事本中填写两个凭证并保存，然后打开 <http://127.0.0.1:5050>。
@@ -127,7 +119,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 cp .env.example .env
 ${EDITOR:-nano} .env
-.venv/bin/python -m fitmix.app
+.venv/bin/python -m vestiai.app
 ```
 
 打开 <http://127.0.0.1:5050>。按 `Control-C` 停止服务。
@@ -166,19 +158,19 @@ ${EDITOR:-nano} .env
 ```bash
 export DASHSCOPE_API_KEY="..."
 export DASHSCOPE_WORKSPACE_ID="..."
-export FITMIX_DEPLOYMENT_PROFILE="demo"
-export FITMIX_ACCESS_PASSWORD="访客访问密码"
-export FITMIX_ADMIN_PASSWORD="管理员密码"
-export FITMIX_SECRET_KEY="一段足够长的随机字符串"
-export FITMIX_VISITOR_TRYON_LIMIT=3
-export FITMIX_VISITOR_BUDGET_CENTS=200
-export FITMIX_GLOBAL_BUDGET_CENTS=6000
-gunicorn --bind 0.0.0.0:${PORT:-5050} --workers 1 --threads 4 fitmix.app:app
+export VESTIAI_DEPLOYMENT_PROFILE="demo"
+export VESTIAI_ACCESS_PASSWORD="访客访问密码"
+export VESTIAI_ADMIN_PASSWORD="管理员密码"
+export VESTIAI_SECRET_KEY="一段足够长的随机字符串"
+export VESTIAI_VISITOR_TRYON_LIMIT=3
+export VESTIAI_VISITOR_BUDGET_CENTS=200
+export VESTIAI_GLOBAL_BUDGET_CENTS=6000
+gunicorn --bind 0.0.0.0:${PORT:-5050} --workers 1 --threads 4 vestiai.app:app
 ```
 
 这与本地 BYOK 相互独立。访客只能生成基础试穿，每个匿名衣橱默认最多 3 次、最多 ¥2；Plus 只对管理员开放。应用还会执行默认 ¥60 的全局软件限额。模型平台侧仍应使用临时 Key 并设置消费上限，演示结束后撤销 Key。
 
-veFaaS 演示模式默认把 SQLite 和图片写入 `/tmp/fitmix-data`，并拒绝在密码或签名密钥缺失时启动。部署包通过 `.vefaasignore` 排除本地 `.env` 与 `data/`。`/tmp` 会随实例销毁而清空，因此短期演示应固定为一个预留实例；需要长期可靠保存时，应改用 NAS 或对象存储与持久化数据库。
+veFaaS 演示模式默认把 SQLite 和图片写入 `/tmp/vestiai-data`，并拒绝在密码或签名密钥缺失时启动。部署包通过 `.vefaasignore` 排除本地 `.env` 与 `data/`。`/tmp` 会随实例销毁而清空，因此短期演示应固定为一个预留实例；需要长期可靠保存时，应改用 NAS 或对象存储与持久化数据库。
 
 ## 备份与恢复
 
@@ -187,29 +179,29 @@ veFaaS 演示模式默认把 SQLite 和图片写入 `/tmp/fitmix-data`，并拒�
 源码版在项目目录运行：
 
 ```bash
-.venv/bin/python -m fitmix.backup create --data-dir data
+.venv/bin/python -m vestiai.backup create --data-dir data
 ```
 
 终端会显示新备份的目录，默认位于项目的 `backups/`。Mac App 的数据备份使用同一个工具，指定实际数据位置：
 
 ```bash
-.venv/bin/python -m fitmix.backup create --data-dir "$HOME/Library/Application Support/FitMix/data"
+.venv/bin/python -m vestiai.backup create --data-dir "$HOME/Library/Application Support/VestiAI/data"
 ```
 
 检查和恢复时，将示例中的 `vestiai-实际备份名称` 换成刚才显示的目录名：
 
 ```bash
-.venv/bin/python -m fitmix.backup verify backups/vestiai-实际备份名称
-.venv/bin/python -m fitmix.backup restore backups/vestiai-实际备份名称 --destination restored-data
+.venv/bin/python -m vestiai.backup verify backups/vestiai-实际备份名称
+.venv/bin/python -m vestiai.backup restore backups/vestiai-实际备份名称 --destination restored-data
 ```
 
 恢复只写入尚不存在的新目录，不覆盖原衣橱。源码版可以先用恢复目录启动检查：
 
 ```bash
-WARDROBE_DATA_DIR="$PWD/restored-data" .venv/bin/python -m fitmix.app
+WARDROBE_DATA_DIR="$PWD/restored-data" .venv/bin/python -m vestiai.app
 ```
 
-Mac App 恢复时，把恢复目标设为 `~/Library/Application Support/FitMix/restored-data`。保持 App 关闭，用 Finder 将原 `data` 重命名保留，再将核验好的 `restored-data` 改名为 `data`。
+Mac App 恢复时，把恢复目标设为 `~/Library/Application Support/VestiAI/restored-data`。保持 App 关闭，用 Finder 将原 `data` 重命名保留，再将核验好的 `restored-data` 改名为 `data`。
 
 数据库升级前会自动建立一份同样格式的备份；迁移失败时回滚数据库修改并停止启动。较新版本的数据不会被旧代码强行打开。备份可能包含人物照片，请保存在自己管理的位置。
 
@@ -237,7 +229,7 @@ macOS 源码后台服务使用 `./scripts/macos/stop.command` 停止，或用 `.
 
 ## 卸载
 
-App 版删除 `/Applications/VestiAI.app` 即可卸载；如需同时清除衣橱数据和本地凭证，再删除 `~/Library/Application Support/FitMix`。源码版停止服务后删除项目文件夹即可。需要撤销调用权限时，请同时在百炼控制台删除对应 API Key。
+App 版删除 `/Applications/VestiAI.app` 即可卸载；如需同时清除衣橱数据和本地凭证，再删除 `~/Library/Application Support/VestiAI`。源码版停止服务后删除项目文件夹即可。需要撤销调用权限时，请同时在百炼控制台删除对应 API Key。
 
 ## 构建 macOS 安装包
 

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-import fitmix.app as wardrobe
+import vestiai.app as wardrobe
 
 
 class FakeBailian:
@@ -65,15 +65,15 @@ class AppTests(unittest.TestCase):
     def test_demo_deployment_requires_auth_and_tmp_storage(self):
         wardrobe.validate_deployment_config("", Path("/not-tmp"), "", "", "")
         with self.assertRaises(RuntimeError):
-            wardrobe.validate_deployment_config("demo", Path("/tmp/fitmix"), "", "admin", "x" * 32)
+            wardrobe.validate_deployment_config("demo", Path("/tmp/vestiai"), "", "admin", "x" * 32)
         with self.assertRaises(RuntimeError):
-            wardrobe.validate_deployment_config("demo", Path("/tmp/fitmix"), "same", "same", "x" * 32)
+            wardrobe.validate_deployment_config("demo", Path("/tmp/vestiai"), "same", "same", "x" * 32)
         with self.assertRaises(RuntimeError):
-            wardrobe.validate_deployment_config("demo", Path("/var/fitmix"), "visitor", "admin", "x" * 32)
-        wardrobe.validate_deployment_config("demo", Path("/tmp/fitmix"), "visitor", "admin", "x" * 32)
+            wardrobe.validate_deployment_config("demo", Path("/var/vestiai"), "visitor", "admin", "x" * 32)
+        wardrobe.validate_deployment_config("demo", Path("/tmp/vestiai"), "visitor", "admin", "x" * 32)
 
     def setUp(self):
-        self.environment = patch.dict(os.environ, {"FITMIX_RECOVERY_DISABLED":"1", "FITMIX_RECOGNITION_CENTS":"5", "FITMIX_SEGMENTATION_CENTS":"10"})
+        self.environment = patch.dict(os.environ, {"VESTIAI_RECOVERY_DISABLED":"1", "VESTIAI_RECOGNITION_CENTS":"5", "VESTIAI_SEGMENTATION_CENTS":"10"})
         self.environment.start()
         self.addCleanup(self.environment.stop)
         self.temp = tempfile.TemporaryDirectory()
@@ -146,14 +146,14 @@ class AppTests(unittest.TestCase):
             )
             self.assertEqual(blocked.status_code, 403)
             config_path.parent.mkdir(parents=True)
-            config_path.write_text("FITMIX_USER_BUDGET_CENTS=300\n",encoding="utf-8")
+            config_path.write_text("VESTIAI_USER_BUDGET_CENTS=300\n",encoding="utf-8")
             saved = self.client.post(
                 "/api/settings",
                 json={"workspace_id": "workspace-one", "api_key": "secret-one"},
             )
             self.assertEqual(saved.status_code, 200)
             self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
-            self.assertIn("FITMIX_USER_BUDGET_CENTS=300",config_path.read_text(encoding="utf-8"))
+            self.assertIn("VESTIAI_USER_BUDGET_CENTS=300",config_path.read_text(encoding="utf-8"))
             settings = self.client.get("/api/settings").json
             self.assertEqual(settings, {"workspace_id": "workspace-one", "api_key_configured": True})
             self.assertNotIn("secret-one", str(settings))
@@ -450,7 +450,7 @@ class AppTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT name, sql FROM sqlite_master ORDER BY name").fetchall(), before)
             self.assertEqual(connection.execute("SELECT id FROM looks").fetchone()[0], "old")
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
-        from fitmix.backup import verify_backup
+        from vestiai.backup import verify_backup
         backups = list((Path(self.temp.name) / "backups").iterdir())
         self.assertEqual(len(backups), 1)
         verify_backup(backups[0])
@@ -462,7 +462,7 @@ class AppTests(unittest.TestCase):
             self.assertEqual(self.client.get(f"/files/{path}").status_code, 404)
 
     def test_shared_services_enforce_identity_without_http(self):
-        from fitmix.services.context import UserContext, ServiceError
+        from vestiai.services.context import UserContext, ServiceError
         owner = UserContext("visitor:a", "visitor")
         other = UserContext("visitor:b", "visitor")
         service = wardrobe.wardrobe_service()

@@ -25,11 +25,11 @@ class ServerTests(unittest.TestCase):
             self.port = probe.getsockname()[1]
         self.environment = {
             key: value for key, value in os.environ.items()
-            if not key.startswith(("FITMIX_", "DASHSCOPE_")) and key != "WARDROBE_DATA_DIR"
+            if not key.startswith(("VESTIAI_", "DASHSCOPE_")) and key != "WARDROBE_DATA_DIR"
         }
         self.environment.update(
-            FITMIX_RUNTIME_DIR=str(self.state),
-            FITMIX_CONFIG_PATH=str(self.directory / "no-credentials.env"),
+            VESTIAI_RUNTIME_DIR=str(self.state),
+            VESTIAI_CONFIG_PATH=str(self.directory / "no-credentials.env"),
             WARDROBE_DATA_DIR=str(self.directory / "wardrobe"),
             PYTHONDONTWRITEBYTECODE="1",
         )

@@ -13,10 +13,10 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from fitmix.bailian import BailianError, BailianSubmissionUnknown
-from fitmix.services.context import ServiceError, UserContext
-from fitmix.services.tryon import TryonService
-from fitmix.services.usage import UsagePolicy, UsageService
+from vestiai.bailian import BailianError, BailianSubmissionUnknown
+from vestiai.services.context import ServiceError, UserContext
+from vestiai.services.tryon import TryonService
+from vestiai.services.usage import UsagePolicy, UsageService
 
 
 class SimulatedTryon:
@@ -99,11 +99,11 @@ class ReliabilityTests(unittest.TestCase):
         root = Path(self.temporary.name)
         environment = {
             key: value for key, value in os.environ.items()
-            if not key.startswith(("FITMIX_", "DASHSCOPE_")) and key != "WARDROBE_DATA_DIR"
+            if not key.startswith(("VESTIAI_", "DASHSCOPE_")) and key != "WARDROBE_DATA_DIR"
         }
-        environment.update(WARDROBE_DATA_DIR=str(root / "data"), FITMIX_CONFIG_PATH=str(root / "no-credentials.env"))
+        environment.update(WARDROBE_DATA_DIR=str(root / "data"), VESTIAI_CONFIG_PATH=str(root / "no-credentials.env"))
         self.isolate(patch.dict(os.environ, environment, clear=True))
-        self.wardrobe = importlib.import_module("fitmix.app")
+        self.wardrobe = importlib.import_module("vestiai.app")
         self.isolate(patch.object(self.wardrobe, "DATA_DIR", root / "data"))
         self.isolate(patch.object(self.wardrobe, "DB_PATH", root / "data" / "wardrobe.db"))
         self.isolate(patch.object(self.wardrobe, "CONFIG_PATH", root / "no-credentials.env"))

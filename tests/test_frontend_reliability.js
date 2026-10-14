@@ -6,7 +6,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
-const appSource = fs.readFileSync(path.join(root, "fitmix/static/app.js"), "utf8");
+const appSource = fs.readFileSync(path.join(root, "vestiai/static/app.js"), "utf8");
 const bindings = appSource.lastIndexOf('\ndocument.querySelectorAll(".tab").forEach');
 assert.ok(bindings > 0, "page event bindings must be found");
 
@@ -57,7 +57,7 @@ function harness(storage = new Map()) {
       return { ok: true, status: 200, json: async () => payload };
     },
   });
-  vm.runInContext(fs.readFileSync(path.join(root, "fitmix/static/pagination.js"), "utf8"), context);
+  vm.runInContext(fs.readFileSync(path.join(root, "vestiai/static/pagination.js"), "utf8"), context);
   vm.runInContext(appSource.slice(0, bindings), context);
   const run = (code) => vm.runInContext(code, context);
   run(`applyAuthState(${JSON.stringify(auth)}); state.garments = [{ id: 'top-1', type: 'upper', label_zh: '上衣', crop_url: '/files/top.png', seasons: [], created_at: '', usage_count: 0 }]; state.personImages = [{ id: 'person-1', name: '形象照', url: '/files/person.jpg' }]; state.selectedPersonImageId = 'person-1'; state.selectedGarments.upper = 'top-1';`);

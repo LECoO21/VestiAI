@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fitmix.backup import create_backup, restore_backup, verify_backup
+from vestiai.backup import create_backup, restore_backup, verify_backup
 
 
 class BackupTests(unittest.TestCase):

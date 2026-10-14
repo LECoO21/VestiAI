@@ -4,8 +4,6 @@
 
 VestiAI is a local-first digital wardrobe with a browser interface. It organizes garments and outfits, manages profile photos, and creates AI virtual try-on results.
 
-VestiAI builds on [FitMix](https://github.com/betterjally-oss/FitMix) and is released under the MIT license, retaining the original attribution. Existing source commands, configuration, and wardrobe storage remain compatible.
-
 The current release includes backups, duplicate-generation protection, task recovery, model budgets and explicit cost confirmation. Automatic outfit recommendations and a chat agent are planned and are not available yet.
 
 > VestiAI uses BYOK (Bring Your Own Key). This repository contains no default API key; each user supplies their own AI service credentials and pays for their own usage.
@@ -20,18 +18,6 @@ The current release includes backups, duplicate-generation protection, task reco
 - Save up to six person photos, browse recent generations, and save results to the outfit library
 - Edit, favorite, merge, and delete garments without deleting independent try-on history
 - Store images and metadata locally in `data/` without an external database
-
-## Screenshots
-
-| Wardrobe | Outfit selection |
-| --- | --- |
-| ![Wardrobe](docs/screenshots/wardrobe.png) | ![Outfit selection](docs/screenshots/try-on.png) |
-
-| AI try-on result | Outfit library |
-| --- | --- |
-| ![AI try-on result](docs/screenshots/try-on-result.png) | ![Outfit library](docs/screenshots/looks.png) |
-
-The screenshots show the earlier demo before the rename. They use purpose-made assets and contain none of the author's real garments, people, or history. The current interface is named VestiAI.
 
 ## Requirements
 
@@ -57,7 +43,7 @@ Never commit `.env`, an API key, or screenshots containing credentials. The macO
 
 ## Model budgets and recovery
 
-Recognition, segmentation and try-on share atomic, cumulative per-job, per-user and application budgets. Unknown submissions retain their estimated cost; the platform bill remains the source of actual charges. Configure positive per-call RMB-cent estimates for `FITMIX_RECOGNITION_CENTS` and `FITMIX_SEGMENTATION_CENTS` in `.env` before importing images; missing estimates block calls. See [.env.example](.env.example). Desktop credentials updates preserve budget configuration. Restart after configuration changes.
+Recognition, segmentation and try-on share atomic, cumulative per-job, per-user and application budgets. Unknown submissions retain their estimated cost; the platform bill remains the source of actual charges. Configure positive per-call RMB-cent estimates for `VESTIAI_RECOGNITION_CENTS` and `VESTIAI_SEGMENTATION_CENTS` in `.env` before importing images; missing estimates block calls. See [.env.example](.env.example). Desktop credentials updates preserve budget configuration. Restart after configuration changes.
 
 Basic/Plus estimates default to 20/50 cents, with 100 cents per job, 1000 cents per ordinary user and the existing 6000-cent application limit. Visitors also retain their existing count and 200-cent cap. Budgets cover all roles and do not reset on refresh or deletion.
 
@@ -74,7 +60,13 @@ The locally built installer supports **Apple Silicon Macs (M1 or newer) running 
 3. On first launch, Control-click VestiAI, choose Open, and confirm. Regular double-click works afterward.
 4. Enter your own Bailian Workspace ID and API key in the API Settings dialog.
 
-Wardrobe data and credentials remain in `~/Library/Application Support/FitMix` so existing wardrobes continue to work. The API key is never committed to GitHub or displayed in the settings screen. The original [GitHub Releases](https://github.com/betterjally-oss/FitMix/releases/latest) still provide the older FitMix installer.
+Wardrobe data and credentials are stored in `~/Library/Application Support/VestiAI`. The API key is never committed to GitHub or displayed in the settings screen.
+
+## Upgrade an existing installation
+
+Quit the app or stop the source server and back up the existing `data/` before upgrading. When upgrading from an earlier desktop installation, move `data/`, `.env`, and `webview/` from its application support directory to `~/Library/Application Support/VestiAI` before launching. If the destination already contains a wardrobe, back up and keep both copies instead of overwriting it.
+
+Application settings use `VESTIAI_*` variables. Reconfigure them using [.env.example](.env.example) when upgrading. The Bailian credential variables `DASHSCOPE_API_KEY` and `DASHSCOPE_WORKSPACE_ID` are unchanged.
 
 ## Install from source
 
@@ -104,7 +96,7 @@ py -3.11 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 notepad .env
-.venv\Scripts\python -m fitmix.app
+.venv\Scripts\python -m vestiai.app
 ```
 
 Fill in both values in Notepad, save the file, then open <http://127.0.0.1:5050>.
@@ -116,7 +108,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 cp .env.example .env
 ${EDITOR:-nano} .env
-.venv/bin/python -m fitmix.app
+.venv/bin/python -m vestiai.app
 ```
 
 Open <http://127.0.0.1:5050>. Press `Control-C` to stop the service.
@@ -155,19 +147,19 @@ Configure the deployer's credentials as server environment variables; visitors d
 ```bash
 export DASHSCOPE_API_KEY="..."
 export DASHSCOPE_WORKSPACE_ID="..."
-export FITMIX_DEPLOYMENT_PROFILE="demo"
-export FITMIX_ACCESS_PASSWORD="visitor password"
-export FITMIX_ADMIN_PASSWORD="administrator password"
-export FITMIX_SECRET_KEY="a long random value"
-export FITMIX_VISITOR_TRYON_LIMIT=3
-export FITMIX_VISITOR_BUDGET_CENTS=200
-export FITMIX_GLOBAL_BUDGET_CENTS=6000
-gunicorn --bind 0.0.0.0:${PORT:-5050} --workers 1 --threads 4 fitmix.app:app
+export VESTIAI_DEPLOYMENT_PROFILE="demo"
+export VESTIAI_ACCESS_PASSWORD="visitor password"
+export VESTIAI_ADMIN_PASSWORD="administrator password"
+export VESTIAI_SECRET_KEY="a long random value"
+export VESTIAI_VISITOR_TRYON_LIMIT=3
+export VESTIAI_VISITOR_BUDGET_CENTS=200
+export VESTIAI_GLOBAL_BUDGET_CENTS=6000
+gunicorn --bind 0.0.0.0:${PORT:-5050} --workers 1 --threads 4 vestiai.app:app
 ```
 
 Hosted credentials are separate from local BYOK. Visitors can use basic try-on only, with defaults of three generations and ¥2 per anonymous wardrobe; Plus is administrator-only. The app also enforces a default ¥60 global software cap. Keep a separate provider-side spending cap and revoke the temporary key after the demo.
 
-In veFaaS demo mode, SQLite and images default to `/tmp/fitmix-data`, and startup fails when access credentials or the signing secret are missing. `.vefaasignore` excludes the local `.env` and `data/` from the deployment package. Because `/tmp` is erased with the instance, keep one reserved instance for a short demo; use NAS or object storage plus a durable database for reliable long-term retention.
+In veFaaS demo mode, SQLite and images default to `/tmp/vestiai-data`, and startup fails when access credentials or the signing secret are missing. `.vefaasignore` excludes the local `.env` and `data/` from the deployment package. Because `/tmp` is erased with the instance, keep one reserved instance for a short demo; use NAS or object storage plus a durable database for reliable long-term retention.
 
 ## Troubleshooting
 
@@ -193,7 +185,7 @@ Use “Continue querying” when a remote task ID exists; this resumes the origi
 
 ## Uninstall
 
-For the app edition, delete `/Applications/VestiAI.app`. To also remove wardrobe data and local credentials, delete `~/Library/Application Support/FitMix`. For the source edition, stop the service and delete the project folder. Delete the corresponding API key in Bailian to revoke access.
+For the app edition, delete `/Applications/VestiAI.app`. To also remove wardrobe data and local credentials, delete `~/Library/Application Support/VestiAI`. For the source edition, stop the service and delete the project folder. Delete the corresponding API key in Bailian to revoke access.
 
 ## Build the macOS installer
 
@@ -218,9 +210,9 @@ The check script uses temporary data, clears real credentials, and blocks live m
 
 ## Backups and recovery
 
-Stop VestiAI before creating or restoring a full backup. Run `python -m fitmix.backup create --data-dir data` with the project virtual environment. The backup includes SQLite (including committed WAL changes) and images, with SHA-256 checksums; it excludes credentials, logs, and thumbnails. The default destination is `backups/`, beside the data directory.
+Stop VestiAI before creating or restoring a full backup. Run `python -m vestiai.backup create --data-dir data` with the project virtual environment. The backup includes SQLite (including committed WAL changes) and images, with SHA-256 checksums; it excludes credentials, logs, and thumbnails. The default destination is `backups/`, beside the data directory.
 
-Use `python -m fitmix.backup verify BACKUP_DIRECTORY` to validate a backup, then `python -m fitmix.backup restore BACKUP_DIRECTORY --destination restored-data`. Recovery only writes into a new directory and preserves the original. For the macOS app, use `~/Library/Application Support/FitMix/data` as the data directory. Database upgrades automatically back up existing data; failed migrations roll back and stop startup. See the Chinese README for complete commands and app recovery steps.
+Use `python -m vestiai.backup verify BACKUP_DIRECTORY` to validate a backup, then `python -m vestiai.backup restore BACKUP_DIRECTORY --destination restored-data`. Recovery only writes into a new directory and preserves the original. For the macOS app, use `~/Library/Application Support/VestiAI/data` as the data directory. Database upgrades automatically back up existing data; failed migrations roll back and stop startup. See the Chinese README for complete commands and app recovery steps.
 
 ## License
 

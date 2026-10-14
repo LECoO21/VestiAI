@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-STATE_DIR = Path(os.environ.get("FITMIX_RUNTIME_DIR", ROOT / "data"))
+STATE_DIR = Path(os.environ.get("VESTIAI_RUNTIME_DIR", ROOT / "data"))
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -47,7 +47,7 @@ def read_record() -> dict | None:
 
 def process_matches(pid: int) -> bool:
     result = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
-    return result.returncode == 0 and result.stdout.strip() == f"{sys.executable} -m fitmix.app"
+    return result.returncode == 0 and result.stdout.strip() == f"{sys.executable} -m vestiai.app"
 
 
 def health(port: int) -> dict | None:
@@ -81,11 +81,11 @@ def start(port: int) -> dict:
             raise RuntimeError(f"端口 {port} 已被其他服务占用，未终止其他程序")
     instance = uuid.uuid4().hex
     environment = os.environ.copy()
-    environment.update(FITMIX_HTTP_PORT=str(port), FITMIX_SERVER_INSTANCE=instance, PYTHONUNBUFFERED="1")
+    environment.update(VESTIAI_HTTP_PORT=str(port), VESTIAI_SERVER_INSTANCE=instance, PYTHONUNBUFFERED="1")
     logfile = STATE_DIR / "server-startup.log"
     with logfile.open("ab") as output:
         process = subprocess.Popen(
-            [sys.executable, "-m", "fitmix.app"], cwd=ROOT, env=environment,
+            [sys.executable, "-m", "vestiai.app"], cwd=ROOT, env=environment,
             stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
@@ -135,7 +135,7 @@ def stop() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="VestiAI 本地后台服务")
     parser.add_argument("action", choices=("start", "stop", "status"))
-    parser.add_argument("--port", type=int, default=int(os.environ.get("FITMIX_HTTP_PORT", "5050")))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("VESTIAI_HTTP_PORT", "5050")))
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("端口必须位于 1–65535")

@@ -5,8 +5,8 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 
-from fitmix.services.context import ServiceError
-from fitmix.services.usage import SCHEMA_SQL, UsagePolicy, UsageService, backfill_legacy_usage
+from vestiai.services.context import ServiceError
+from vestiai.services.usage import SCHEMA_SQL, UsagePolicy, UsageService, backfill_legacy_usage
 
 
 class UsageTests(unittest.TestCase):

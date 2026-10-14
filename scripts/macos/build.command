@@ -9,7 +9,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-BUILD_PYTHON="${FITMIX_BUILD_PYTHON:-python3}"
+BUILD_PYTHON="${VESTIAI_BUILD_PYTHON:-python3}"
 if ! command -v "$BUILD_PYTHON" >/dev/null 2>&1; then
   printf '未找到 Python 3。请先安装 Python 3.11 或更高版本。\n'
   exit 1
@@ -29,12 +29,12 @@ fi
 "$BUILD_VENV/bin/python" -m pip install --disable-pip-version-check --quiet \
   -r requirements.txt pyinstaller==6.22.2 pywebview==6.2.1
 
-VERSION="${FITMIX_VERSION:-0.1.1}"
+VERSION="${VESTIAI_VERSION:-0.1.1}"
 ARCH="$(uname -m)"
 APP_PATH="$PWD/dist/VestiAI.app"
 DMG_NAME="VestiAI-macOS-${ARCH}.dmg"
 
-# Preserve the installed app's identity and permissions when changing its display name.
+# VestiAI application identity and bundled resources.
 
 "$BUILD_VENV/bin/python" -m PyInstaller \
   --noconfirm \
@@ -43,14 +43,14 @@ DMG_NAME="VestiAI-macOS-${ARCH}.dmg"
   --onedir \
   --name VestiAI \
   --icon "$PWD/scripts/macos/VestiAI.icns" \
-  --osx-bundle-identifier com.betterjally.fitmix \
-  --add-data "$PWD/fitmix/templates:fitmix/templates" \
-  --add-data "$PWD/fitmix/static:fitmix/static" \
+  --osx-bundle-identifier com.leco.vestiai \
+  --add-data "$PWD/vestiai/templates:vestiai/templates" \
+  --add-data "$PWD/vestiai/static:vestiai/static" \
   --hidden-import webview.platforms.cocoa \
   --distpath dist \
   --workpath build/pyinstaller \
   --specpath build \
-  fitmix/desktop.py
+  vestiai/desktop.py
 
 PLIST="$APP_PATH/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$PLIST"

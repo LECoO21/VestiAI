@@ -322,14 +322,14 @@ flowchart TB
 
 | 文件／模块 | 负责什么 | 开始阶段 |
 | --- | --- | --- |
-| `fitmix/app.py` | 保留 Flask 路由与页面入口，逐步减少路由内重复业务逻辑 | 0 |
-| `fitmix/services/wardrobe.py`（拟新增） | 查询单品、校验组合、保存搭配；接收服务端确定的用户上下文 | 0 |
-| `fitmix/services/tryon.py`（拟新增） | 费用授权、唯一请求、提交与恢复；封装现有试穿能力 | 0 |
-| `fitmix/bailian.py` | 继续提供模型调用；按调用性质区分重试，并增加经过验证的推荐／工具调用方式 | 0–2 |
-| `fitmix/services/recommendation.py`（拟新增） | 候选筛选、偏好／天气上下文、结构化输出和推荐校验 | 1 |
-| `fitmix/agent.py`（拟新增） | 一个主 Agent 循环、工具注册和结果反馈 | 2 |
-| `fitmix/services/import_batch.py`（拟新增） | 批量图片处理、待审核条目、确认入库与失败项处理 | 3 |
-| `fitmix/templates/index.html` 与 `fitmix/static/` | 在现有界面加入相应区域，必要时按功能拆分 JavaScript | 各阶段 |
+| `vestiai/app.py` | 保留 Flask 路由与页面入口，逐步减少路由内重复业务逻辑 | 0 |
+| `vestiai/services/wardrobe.py`（拟新增） | 查询单品、校验组合、保存搭配；接收服务端确定的用户上下文 | 0 |
+| `vestiai/services/tryon.py`（拟新增） | 费用授权、唯一请求、提交与恢复；封装现有试穿能力 | 0 |
+| `vestiai/bailian.py` | 继续提供模型调用；按调用性质区分重试，并增加经过验证的推荐／工具调用方式 | 0–2 |
+| `vestiai/services/recommendation.py`（拟新增） | 候选筛选、偏好／天气上下文、结构化输出和推荐校验 | 1 |
+| `vestiai/agent.py`（拟新增） | 一个主 Agent 循环、工具注册和结果反馈 | 2 |
+| `vestiai/services/import_batch.py`（拟新增） | 批量图片处理、待审核条目、确认入库与失败项处理 | 3 |
+| `vestiai/templates/index.html` 与 `vestiai/static/` | 在现有界面加入相应区域，必要时按功能拆分 JavaScript | 各阶段 |
 | `tests/` | 扩展现有 unittest，验证新行为及费用、权限、恢复边界 | 各阶段 |
 
 先使用当前 Python、Flask、SQLite 和后台线程。一个本地衣橱 Agent 不需要先升级为多服务系统，也不需要为了参考外部仓库改用 React 或 PostgreSQL。
@@ -401,9 +401,9 @@ Agent 运行建议状态为：`queued`、`running`、`waiting_user`、`waiting_r
 本方案核对过的本地依据：
 
 - [项目说明](../README.md)：当前功能、安装、费用与数据位置。
-- [业务后端](../fitmix/app.py)：数据结构、任务执行、搭配保存、权限与额度。
-- [模型接口](../fitmix/bailian.py)：四个模型 ID、提交重试和任务查询。
-- [前端交互](../fitmix/static/app.js)：当前搭配、费用确认、任务轮询和结果展示。
+- [业务后端](../vestiai/app.py)：数据结构、任务执行、搭配保存、权限与额度。
+- [模型接口](../vestiai/bailian.py)：四个模型 ID、提交重试和任务查询。
+- [前端交互](../vestiai/static/app.js)：当前搭配、费用确认、任务轮询和结果展示。
 - [业务测试](../tests/test_app.py) 与 [模型接口测试](../tests/test_bailian.py)：已有验证范围。
 - Agent Blueprint 的完整蓝图与方案版蓝图：本地外部设计参考，用于组件取舍与架构方法；未包含在本仓库中。
 

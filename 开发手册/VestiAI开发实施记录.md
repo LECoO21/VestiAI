@@ -2,16 +2,18 @@
 
 本文件记录实际交付和验收结果。需求顺序以 [开发优先级排期手册](VestiAI开发优先级排期手册.md) 为准，整体设计见 [项目改进与迭代开发方案](VestiAI项目改进与迭代开发方案.md)。不安排日期、工期或具体负责人员。
 
-## 项目更名：VestiAI
+## 项目标识与代码结构
 
 - 网页标题、导航名称、登录文案、Mac 窗口与启动提示统一为 **VestiAI**。
-- 后续构建的 App 和安装包命名为 `VestiAI.app`、`VestiAI-macOS-arm64.dmg`；本次只更新构建配置，未重新生成安装包。
-- 开发手册文件名与相互引用同步更名；图片下载和新备份采用 `vestiai-` 前缀，旧备份仍可校验与恢复。
-- 原 Python 包 `fitmix`、`FITMIX_*` 配置、Mac 数据目录 `~/Library/Application Support/FitMix` 和应用标识保留兼容，已有衣橱与凭证不迁移。
-- 原 GitHub 仓库链接与版权保持真实来源；旧截图明确标为更名前演示。
-- 开发优先级和功能交付状态不因更名改变。
-- 更名后 38 项既有测试、前端语法、Mac 脚本语法和服务配置检查通过，文档链接与打包图标路径有效。
-- 项目根文件夹由 `FitMix-main` 更名为 `VestiAI`，虚拟环境中的启动入口与激活脚本同步修复路径；源码安装示例采用 `VestiAI` 目录名。
+- 项目根目录为 `VestiAI`，Python 包为 `vestiai`，应用配置使用 `VESTIAI_*` 环境变量。
+- App 和安装包命名为 `VestiAI.app`、`VestiAI-macOS-arm64.dmg`；安装包通过构建脚本生成。
+- Mac App 数据和凭证目录为 `~/Library/Application Support/VestiAI`；源码版默认使用项目内 `data/`。
+- 图片下载和备份采用 `vestiai-` 前缀；文档中的代码路径与启动命令统一使用 `vestiai`。
+- 应用图标使用酒红底与字母 V，矢量源文件为 `scripts/macos/VestiAI.svg`；已删除先前界面截图及其文档引用。
+- 打包标识为 `com.leco.vestiai`，应用变量与启动入口统一采用当前项目名称。
+- 统一标识后，86 项 Python 测试、8 个前端可靠性场景与现有脚本／配置检查通过；本地服务已通过 `vestiai.app` 启动并核验首页与静态资源。
+- MIT 许可证中的必要版权声明保留；未重新构建 Mac 安装包。
+- 当前功能与验收范围见下方各批次记录，自动推荐和聊天 Agent 仍待开发。
 
 ## 第一批：基础可复用
 
@@ -24,7 +26,7 @@
 | 对应需求 | 实际实现 | 使用或核验方式 |
 | --- | --- | --- |
 | P0-01 | 建立本地 Git 基线，保存开发前源码 | 开发前基线提交为 `e0d8407`；只建立本地记录 |
-| P0-01 | SQLite 与原图、衣物图、形象照、试穿图备份 | `python -m fitmix.backup create`；含 SHA-256 校验清单 |
+| P0-01 | SQLite 与原图、衣物图、形象照、试穿图备份 | `python -m vestiai.backup create`；含 SHA-256 校验清单 |
 | P0-01 | 校验和恢复备份 | `verify` 检查备份，`restore` 写入新目录；原数据保留 |
 | P0-01 | 数据库版本与升级前备份 | 当前数据库版本为 `1`；旧数据库迁移前自动备份，较新版本数据拒绝打开 |
 | P0-01 | 迁移整体回滚 | 表结构、关联、数据和版本号在同一事务修改；失败后回滚，删除本次迁移新建的图片副本 |
@@ -60,11 +62,11 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `fitmix/backup.py` | 备份、校验、恢复；独立运行，不启动网页或迁移数据库 |
-| `fitmix/services/context.py` | 服务端身份与统一业务错误 |
-| `fitmix/services/wardrobe.py` | 共享查询、搭配保存、任务和文件归属 |
-| `fitmix/services/tryon.py` | 共享试穿创建、Plus、快照和后台任务登记 |
-| `fitmix/app.py` | 网页调用共用函数，执行带备份与回滚的兼容迁移 |
+| `vestiai/backup.py` | 备份、校验、恢复；独立运行，不启动网页或迁移数据库 |
+| `vestiai/services/context.py` | 服务端身份与统一业务错误 |
+| `vestiai/services/wardrobe.py` | 共享查询、搭配保存、任务和文件归属 |
+| `vestiai/services/tryon.py` | 共享试穿创建、Plus、快照和后台任务登记 |
+| `vestiai/app.py` | 网页调用共用函数，执行带备份与回滚的兼容迁移 |
 | `scripts/check.py` | 使用既有检查工具的安全验收入口 |
 | `tests/test_backup.py`、`tests/test_app.py` | 本批新增的行为验证 |
 
@@ -136,11 +138,11 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `fitmix/bailian.py` | 区分收费提交与只读查询重试，未知提交异常、原任务查询及原始用量 |
-| `fitmix/services/usage.py` | 预算预留、用量与费用状态、旧任务补账 |
-| `fitmix/services/tryon.py` | 准备报价、明确确认、范围校验、单次消费和试穿历史 |
-| `fitmix/app.py` | 兼容迁移、唯一任务执行、收费步骤缓存与恢复接口 |
-| `fitmix/static/app.js`、`fitmix/templates/index.html` | 费用与确认、丢响应恢复、未知状态与原任务查询 |
+| `vestiai/bailian.py` | 区分收费提交与只读查询重试，未知提交异常、原任务查询及原始用量 |
+| `vestiai/services/usage.py` | 预算预留、用量与费用状态、旧任务补账 |
+| `vestiai/services/tryon.py` | 准备报价、明确确认、范围校验、单次消费和试穿历史 |
+| `vestiai/app.py` | 兼容迁移、唯一任务执行、收费步骤缓存与恢复接口 |
+| `vestiai/static/app.js`、`vestiai/templates/index.html` | 费用与确认、丢响应恢复、未知状态与原任务查询 |
 | `tests/test_reliability.py`、`tests/test_usage.py`、`tests/test_frontend_reliability.js` | 本批行为与边界验证 |
 
 ## 后续需求状态

@@ -14,13 +14,13 @@ def main() -> int:
     os.chdir(root)
     sys.path.insert(0, str(root))
     for name in list(os.environ):
-        if name.startswith(("FITMIX_", "DASHSCOPE_")) or name == "WARDROBE_DATA_DIR":
+        if name.startswith(("VESTIAI_", "DASHSCOPE_")) or name == "WARDROBE_DATA_DIR":
             os.environ.pop(name)
-    with tempfile.TemporaryDirectory(prefix="fitmix-check-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="vestiai-check-") as temporary:
         os.environ.update(
             WARDROBE_DATA_DIR=str(Path(temporary) / "data"),
-            FITMIX_CONFIG_PATH=str(Path(temporary) / "no-credentials.env"),
-            FITMIX_RECOVERY_DISABLED="1",
+            VESTIAI_CONFIG_PATH=str(Path(temporary) / "no-credentials.env"),
+            VESTIAI_RECOVERY_DISABLED="1",
             PYTHONDONTWRITEBYTECODE="1",
         )
         import requests
@@ -36,12 +36,12 @@ def main() -> int:
                 print("缺少 Node.js，前端检查未完成，请安装后重新运行。")
                 return 1
             for command in (
-                [node, "--check", "fitmix/static/app.js"],
-                [node, "--check", "fitmix/static/pagination.js"],
-                [node, "fitmix/static/pagination.js"],
+                [node, "--check", "vestiai/static/app.js"],
+                [node, "--check", "vestiai/static/pagination.js"],
+                [node, "vestiai/static/pagination.js"],
                 [node, "tests/test_frontend_reliability.js"],
                 *[ ["bash", "-n", f"scripts/macos/{name}.command"] for name in ("setup","start","stop","build") ],
-                [sys.executable, "-B", "-m", "gunicorn", "--check-config", "fitmix.app:app"],
+                [sys.executable, "-B", "-m", "gunicorn", "--check-config", "vestiai.app:app"],
             ):
                 subprocess.run(command, check=True)
             print(f"全部检查通过：{result.testsRun} 项测试、前端语法、Mac 脚本和服务配置。")
