@@ -4,7 +4,9 @@
 
 VestiAI is a local-first digital wardrobe with a browser interface. It organizes garments and outfits, manages profile photos, and creates AI virtual try-on results.
 
-The project was renamed from FitMix to VestiAI. Existing source commands, configuration, and wardrobe storage remain compatible.
+VestiAI builds on [FitMix](https://github.com/betterjally-oss/FitMix) and is released under the MIT license, retaining the original attribution. Existing source commands, configuration, and wardrobe storage remain compatible.
+
+The current release includes backups, duplicate-generation protection, task recovery, model budgets and explicit cost confirmation. Automatic outfit recommendations and a chat agent are planned and are not available yet.
 
 > VestiAI uses BYOK (Bring Your Own Key). This repository contains no default API key; each user supplies their own AI service credentials and pays for their own usage.
 
@@ -79,7 +81,7 @@ Wardrobe data and credentials remain in `~/Library/Application Support/FitMix` s
 Clone the repository first:
 
 ```bash
-git clone https://github.com/betterjally-oss/FitMix.git VestiAI
+git clone https://github.com/LECoO21/VestiAI.git
 cd VestiAI
 ```
 
@@ -183,11 +185,11 @@ Use JPG or PNG with clear clothing, one person, good light, and a stable network
 
 **Port 5050 is already in use**
 
-Close the old VestiAI terminal or stop the process that owns the port, then retry.
+For the macOS source background server, run `./scripts/macos/stop.command`, or check `.venv/bin/python scripts/macos/server.py status`. Closing the launcher terminal does not stop the server. If the port is still occupied, inspect the owning program and avoid stopping unrelated services.
 
 **Model task failed or timed out**
 
-VestiAI does not automatically create another paid try-on. Retry manually with the current selection and inspect quota, permissions, and task status in Bailian.
+Use “Continue querying” when a remote task ID exists; this resumes the original task without creating another paid generation. If submission is uncertain and no ID was received, verify the original request in Bailian first. Any new generation after a confirmed failure requires a new explicit cost confirmation.
 
 ## Uninstall
 

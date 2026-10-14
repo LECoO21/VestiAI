@@ -4,7 +4,9 @@
 
 VestiAI 是一个可本地运行、自带网页界面的数字衣橱。它能整理衣物、保存搭配、管理形象照，并生成 AI 虚拟试穿效果。
 
-项目由 FitMix 更名为 VestiAI。内部代码结构和启动命令继续兼容原版，已有衣橱与凭证无需搬迁。
+VestiAI 基于 [FitMix](https://github.com/betterjally-oss/FitMix) 继续开发，以 MIT 许可开源，保留原作者署名。内部代码结构和启动命令继续兼容原版，已有衣橱与凭证无需搬迁。
+
+当前已完成基础可靠性改造，包括备份、防重复生成、任务恢复、模型预算与费用确认。自动搭配推荐和聊天 Agent 仍在开发规划中，当前版本不提供这些功能。
 
 > 本项目采用 BYOK（Bring Your Own Key）：仓库不包含任何默认 API Key，使用者自行配置 AI 服务凭证并承担相应费用。
 
@@ -84,7 +86,7 @@ DASHSCOPE_WORKSPACE_ID=你的_业务空间_ID
 先克隆仓库：
 
 ```bash
-git clone https://github.com/betterjally-oss/FitMix.git VestiAI
+git clone https://github.com/LECoO21/VestiAI.git
 cd VestiAI
 ```
 
@@ -227,11 +229,11 @@ Mac App 恢复时，把恢复目标设为 `~/Library/Application Support/FitMix/
 
 **端口 5050 已被占用**
 
-先关闭旧的 VestiAI 终端；或找到占用该端口的进程并停止后重试。
+macOS 源码后台服务使用 `./scripts/macos/stop.command` 停止，或用 `.venv/bin/python scripts/macos/server.py status` 查看状态。关闭启动终端不会停止后台服务；如端口仍被占用，请检查占用程序，不要误停其他服务。
 
 **模型任务失败或超时**
 
-不会自动重复创建付费试穿。稍后在保留当前选择的情况下手动重试，并到百炼控制台检查额度、权限与任务状态。
+如果已经取得远程任务 ID，使用“继续查询”处理原任务，不会新建付费生成。“待核实”且没有 ID 时，先在百炼控制台核对原请求。确认失败后确需新生成时，重新查看并明确确认本次费用。
 
 ## 卸载
 

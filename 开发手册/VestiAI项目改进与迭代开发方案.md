@@ -226,7 +226,7 @@ Star 是讨论当天的快照，只作为关注度参考，不作为功能或可
 | [OOTDiffusion](https://github.com/levihsu/OOTDiffusion) | 6,606 | 备选试穿实验 | 阶段 5；不进入首轮安装依赖 |
 | [IDM-VTON](https://github.com/yisol/IDM-VTON) | 5,219 | 备选试穿实验 | 阶段 5；根据实测效果选择 |
 | [OutfitAnyone](https://github.com/HumanAIGC/OutfitAnyone) | 5,980 | 了解技术和效果，沿用现有百炼服务 | GitHub 仓库只有介绍和演示素材，没有可直接迁入的核心实现 |
-| [Agent Blueprint](../../agent-blueprint/BLUEPRINT.md) | 不适用 | 提取必要的循环、工具、权限和完成检查机制 | 阶段 2；不整体复制集成示例，不安装全部 17 个组件 |
+| Agent Blueprint（本地设计参考） | 不适用 | 提取必要的循环、工具、权限和完成检查机制 | 阶段 2；不整体复制集成示例，不安装全部 17 个组件 |
 
 Wardrobe 与 Wardrowbe 采用 MIT 许可。复用代码或提示词文件时，保留来源与版权说明。
 
@@ -405,7 +405,7 @@ Agent 运行建议状态为：`queued`、`running`、`waiting_user`、`waiting_r
 - [模型接口](../fitmix/bailian.py)：四个模型 ID、提交重试和任务查询。
 - [前端交互](../fitmix/static/app.js)：当前搭配、费用确认、任务轮询和结果展示。
 - [业务测试](../tests/test_app.py) 与 [模型接口测试](../tests/test_bailian.py)：已有验证范围。
-- [完整蓝图](../../agent-blueprint/BLUEPRINT.md) 与 [方案版蓝图](../../agent-blueprint/BLUEPRINT_PLAN_ONLY.md)：组件取舍与架构方法。
+- Agent Blueprint 的完整蓝图与方案版蓝图：本地外部设计参考，用于组件取舍与架构方法；未包含在本仓库中。
 
 关键外部依据：
 

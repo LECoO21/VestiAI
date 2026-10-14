@@ -154,7 +154,7 @@ CatVTON、OOTDiffusion、IDM-VTON 当前采用非商业许可，商业接入需�
 | --- | --- | --- |
 | [Wardrowbe](https://github.com/Anyesh/wardrowbe) | 候选筛选、推荐规则、真实 ID 校验、偏好和天气上下文；适配为 Flask + SQLite | P1-01、P1-03、P1-04、P2-04 至 P2-06 |
 | [Wardrobe](https://github.com/tandpfun/wardrobe) | 搭配规则、批量整理、逐项审核与确认入库；不迁入其整套应用和 JSON 数据库 | P1-03、P2-01 至 P2-03 |
-| [Agent Blueprint](../../agent-blueprint/BLUEPRINT.md) | 主循环、业务工具、权限、结果反馈和完成判断；复用现有后台任务 | P1-06 至 P1-09；权限与预算落实在 P0 |
+| Agent Blueprint（本地设计参考） | 主循环、业务工具、权限、结果反馈和完成判断；复用现有后台任务 | P1-06 至 P1-09；权限与预算落实在 P0 |
 | [CatVTON](https://github.com/Zheng-Chong/CatVTON) | 满足条件后作为首个备选试穿实验 | P3-01、P3-03 |
 | [OOTDiffusion](https://github.com/levihsu/OOTDiffusion)、[IDM-VTON](https://github.com/yisol/IDM-VTON) | 首个备选不足时的比较对象 | P3-02、P3-03 |
 | [OutfitAnyone](https://github.com/HumanAIGC/OutfitAnyone) | 了解效果，继续使用 VestiAI 已接入的百炼服务；该仓库没有可直接搬入的核心代码 | 复用现有能力，不另排整仓接入任务 |
